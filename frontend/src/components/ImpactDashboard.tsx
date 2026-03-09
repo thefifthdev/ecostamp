@@ -92,7 +92,7 @@ export default function ImpactDashboard({ walletAddress }: { walletAddress: stri
               <div className="text-xs uppercase tracking-widest text-sage-500 mb-2">Current Tier</div>
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-2 border animate-float"
                    style={{ borderColor: `${currentTier.color}50`, background: `${currentTier.color}18` }}>
-                <IconAward size={32} style={{ color: currentTier.color }} />
+                <IconAward size={32}/>
               </div>
               <div className="font-display text-xl" style={{ color: currentTier.color }}>
                 {currentTier.name}
@@ -156,7 +156,7 @@ export default function ImpactDashboard({ walletAddress }: { walletAddress: stri
                   >
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border"
                          style={{ borderColor: `${tier.color}40`, background: `${tier.color}18` }}>
-                      <IconAward size={18} style={{ color: tier.color }} />
+                      <IconAward size={18} />
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
