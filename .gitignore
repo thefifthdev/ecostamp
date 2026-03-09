@@ -1,7 +1,7 @@
 node_modules
 .env
 package-lock.json
-deploy/phase1-report.json
+deploy/phase*.json
 contracts/.DS_Store
 contracts/ecostamp/.DS_Store
 frontend/.env.contracts
