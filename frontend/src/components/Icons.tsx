@@ -190,6 +190,13 @@ export const IconVerified = base(<>
   <polyline points="9 12 11 14 15 10" />
 </>);
 
+export const IconKey = base(<>
+  <circle cx="7" cy="15" r="4" />
+  <path d="M11 15h10" />
+  <path d="M17 15v3" />
+  <path d="M20 15v2" />
+</>);
+
 // Category → icon mapping
 export const CATEGORY_ICONS: Record<string, React.FC<IconProps>> = {
   hotel:      IconHotel,
@@ -199,6 +206,7 @@ export const CATEGORY_ICONS: Record<string, React.FC<IconProps>> = {
   activity:   IconActivity,
   restaurant: IconRestaurant,
   cruise:     IconShip,
+  key: IconKey
 };
 
 export function CategoryIcon({ category, size = 20, className = '' }: { category: string; size?: number; className?: string }) {
