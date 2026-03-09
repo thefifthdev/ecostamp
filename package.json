@@ -1,0 +1,25 @@
+{
+  "name": "ecostamp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EcoStamp — Verifiable Travel Impact Protocol on Stacks Bitcoin L2",
+  "scripts": {
+    "deploy:phase1": "node deploy/deploy-phase1.js",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "install:all": "cd frontend && npm install && cd ../deploy && npm install"
+  },
+  "workspaces": [
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@stacks/wallet-sdk": "^7.2.0",
+    "@stacks/connect": "^7.10.0",
+    "@stacks/transactions": "^6.16.1",
+    "@stacks/network": "^6.13.0",
+    "dotenv": "^17.3.1"
+  }
+}
