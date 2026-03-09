@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { IconLeaf, IconMenu, IconX, IconWallet } from './Icons';
 
-type Section = 'home' | 'stamps' | 'submit' | 'impact' | 'providers';
+type Section = 'home' | 'stamps' | 'submit' | 'impact' | 'providers' | 'guides';
 
 interface NavProps {
   activeSection: Section;
@@ -16,6 +16,7 @@ const NAV_ITEMS: { id: Section; label: string }[] = [
   { id: 'home',      label: 'Home'      },
   { id: 'stamps',    label: 'My Stamps' },
   { id: 'submit',    label: 'Earn Stamp'},
+  { id: 'guides',    label: 'Guides'    },
   { id: 'impact',    label: 'Impact'    },
   { id: 'providers', label: 'Providers' },
 ];

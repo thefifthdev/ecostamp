@@ -7,11 +7,12 @@ import StampGallery from '@/components/StampGallery';
 import SubmitProof from '@/components/SubmitProof';
 import ImpactDashboard from '@/components/ImpactDashboard';
 import Providers from '@/components/Providers';
+import Guides from '@/components/Guides';
 import Footer from '@/components/Footer';
 import ParticleField from '@/components/ParticleField';
 
 export default function Home() {
-  const [activeSection, setActiveSection] = useState<'home' | 'stamps' | 'submit' | 'impact' | 'providers'>('home');
+  const [activeSection, setActiveSection] = useState<'home' | 'stamps' | 'submit' | 'impact' | 'providers' | 'guides'>('home');
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
 
@@ -53,6 +54,7 @@ export default function Home() {
           {activeSection === 'submit'    && <SubmitProof walletAddress={walletAddress} />}
           {activeSection === 'impact'    && <ImpactDashboard walletAddress={walletAddress} />}
           {activeSection === 'providers' && <Providers />}
+          {activeSection === 'guides'    && <Guides walletAddress={walletAddress} />}
         </main>
 
         <Footer />
