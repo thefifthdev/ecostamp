@@ -10,3 +10,4 @@ frontend/next-env.d.ts
 frontend/next-env.d.ts
 frontend/next.config.js
 .DS_Store
+.env.contracts.phase3

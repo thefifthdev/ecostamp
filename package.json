@@ -5,6 +5,7 @@
   "description": "EcoStamp — Verifiable Travel Impact Protocol on Stacks Bitcoin L2",
   "scripts": {
     "deploy:phase1": "node deploy/deploy-phase1.js",
+    "deploy:phase3": "node deploy/deploy-phase3.js",
     "content-server": "cd content-server && npm start",
     "content-server:dev": "cd content-server && npm run dev",
     "frontend:dev": "cd frontend && npm run dev",
