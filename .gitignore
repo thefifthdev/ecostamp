@@ -1,0 +1,11 @@
+node_modules
+.env
+package-lock.json
+deploy/phase1-report.json
+contracts/.DS_Store
+contracts/ecostamp/.DS_Store
+frontend/.env.contracts
+frontend/.next/
+frontend/next-env.d.ts
+frontend/next-env.d.ts
+frontend/next.config.js
