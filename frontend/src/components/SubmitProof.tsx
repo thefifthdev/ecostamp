@@ -16,8 +16,9 @@ import { fetchProviders, type ProviderRecord } from '@/lib/stacks';
 import { uintCV } from '@stacks/transactions';
 import { addActivity } from '@/lib/activity';
 import { bufferCvFromHex } from '@/lib/clarity';
+import { openContractCall } from '@stacks/connect';
 
-type Step = 'select' | 'upload' | 'validating' | 'minting' | 'success' | 'error';
+type Step = 'select' | 'upload' | 'validating' | 'ready' | 'minting' | 'success' | 'error';
 
 const FALLBACK_PROVIDERS: ProviderRecord[] = [
   { id: 1, name: 'The Green Lodge',  category: 'hotel',     ecoScore: 92, status: 'approved', owner: 'ST1…', stampsIssued: 284 },
@@ -40,6 +41,7 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
 
   const [ecoPoints, setEcoPoints] = useState<number | null>(null);
   const [bookingHash, setBookingHash] = useState<string | null>(null);
+  const [bookingProof, setBookingProof] = useState<string | null>(null);
   const [mintedTxId, setMintedTxId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
@@ -64,6 +66,7 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
     setFile(null);
     setEcoPoints(null);
     setBookingHash(null);
+    setBookingProof(null);
     setMintedTxId(null);
     setError('');
   };
@@ -75,6 +78,7 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
     setFile(null);
     setEcoPoints(null);
     setBookingHash(null);
+    setBookingProof(null);
     setMintedTxId(null);
     setError('');
   };
@@ -85,10 +89,11 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
     setError('');
     setEcoPoints(null);
     setBookingHash(null);
+    setBookingProof(null);
     setMintedTxId(null);
   };
 
-  const handleSubmit = async () => {
+  const handleValidate = async () => {
     if (!selectedProvider) return;
     if (!walletAddress) {
       setError('Connect your Stacks wallet to mint a stamp on-chain.');
@@ -123,7 +128,31 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
       const pts = Number(oracleData.ecoPoints ?? 0);
       setEcoPoints(pts);
       setBookingHash(bh);
+      setBookingProof(bp);
 
+      // Separate mint click from validation to preserve browser "user activation"
+      // (some wallets won't open if the transaction request happens after awaits).
+      setStep('ready');
+    } catch (e: any) {
+      setError(e?.message ?? 'Minting failed');
+      setStep('error');
+    }
+  };
+
+  const handleMint = async () => {
+    if (!selectedProvider) return;
+    if (!walletAddress) {
+      setError('Connect your Stacks wallet to mint a stamp on-chain.');
+      setStep('error');
+      return;
+    }
+    if (!bookingHash || !bookingProof || ecoPoints === null) {
+      setError('Booking proof not ready. Validate first, then mint.');
+      setStep('error');
+      return;
+    }
+
+    try {
       const contractId = (process.env.NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS || '').trim();
       if (!contractId.includes('.')) {
         throw new Error(
@@ -134,7 +163,6 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
       const [contractAddress, contractName] = contractId.split('.');
 
       setStep('minting');
-      const { openContractCall } = await import('@stacks/connect');
 
       await new Promise<void>((resolve, reject) => {
         openContractCall({
@@ -143,9 +171,9 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
           functionName: 'earn-stamp',
           functionArgs: [
             uintCV(selectedProvider.id),
-            bufferCvFromHex(bh),
-            bufferCvFromHex(bp),
-            uintCV(pts),
+            bufferCvFromHex(bookingHash),
+            bufferCvFromHex(bookingProof),
+            uintCV(ecoPoints),
           ],
           network: stacksNetwork(),
           appDetails: { name: 'EcoStamp', icon: '/icon.png' },
@@ -157,7 +185,7 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
                 id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
                 kind: 'stamp',
                 title: 'Stamp minted',
-                detail: `${selectedProvider.name} · +${pts} eco points`,
+                detail: `${selectedProvider.name} · +${ecoPoints} eco points`,
                 timestamp: new Date().toISOString(),
                 txId,
               });
@@ -254,7 +282,7 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
             </div>
           )}
 
-          {step === 'upload' && selectedProvider && (
+          {(step === 'upload' || step === 'ready') && selectedProvider && (
             <div className="animate-fade-up space-y-6">
               <div className="flex items-center gap-3">
                 <button onClick={goBack} className="text-sage-500 hover:text-sage-300 transition-colors text-sm">
@@ -275,9 +303,20 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
                 <label className="block text-xs text-sage-500 uppercase tracking-widest">Booking reference</label>
                 <input
                   value={bookingRef}
-                  onChange={e => setBookingRef(e.target.value)}
+                  onChange={e => {
+                    setBookingRef(e.target.value);
+                    if (step === 'ready') {
+                      setEcoPoints(null);
+                      setBookingHash(null);
+                      setBookingProof(null);
+                      setMintedTxId(null);
+                      setError('');
+                      setStep('upload');
+                    }
+                  }}
                   placeholder="e.g., ABCD-1234"
                   className="eco-input"
+                  disabled={step === 'ready'}
                 />
                 <p className="text-xs text-sage-600">
                   Tip: any unique confirmation string works in demo mode. Production providers validate via their API.
@@ -334,13 +373,60 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
                 </div>
               </div>
 
-              <button
-                onClick={handleSubmit}
-                disabled={!bookingRef.trim() || selectedProvider.status !== 'approved'}
-                className="w-full btn-primary py-4 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0"
-              >
-                Validate & Mint Stamp
-              </button>
+              {step === 'upload' ? (
+                <button
+                  onClick={handleValidate}
+                  disabled={!bookingRef.trim() || selectedProvider.status !== 'approved'}
+                  className="w-full btn-primary py-4 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+                >
+                  Validate Booking
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="glass-light rounded-2xl p-4 border border-glow-300/10">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm text-cream-200 flex items-center gap-2">
+                        <IconCheckCircle size={18} className="text-glow-400" />
+                        Booking verified
+                      </div>
+                      <button
+                        onClick={() => {
+                          setEcoPoints(null);
+                          setBookingHash(null);
+                          setBookingProof(null);
+                          setMintedTxId(null);
+                          setError('');
+                          setStep('upload');
+                        }}
+                        className="text-xs text-sage-500 hover:text-sage-300 transition-colors"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-3 mt-3">
+                      <div className="glass rounded-xl px-4 py-3">
+                        <div className="text-xs text-sage-500">Eco points</div>
+                        <div className="text-glow-300 font-display text-xl">+{ecoPoints ?? 0}</div>
+                      </div>
+                      <div className="glass rounded-xl px-4 py-3">
+                        <div className="text-xs text-sage-500">Booking hash</div>
+                        <div className="font-mono text-[11px] text-sage-300 break-all">{bookingHash}</div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-sage-600 mt-3">
+                      Mint requires a wallet popup. If you have multiple Stacks wallets installed, the browser may open a different one.
+                      Disable other Stacks wallets to force Leather, or select Leather when prompted.
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleMint}
+                    className="w-full btn-primary py-4"
+                  >
+                    Mint Stamp
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -467,7 +553,9 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
 function StepBar({ current }: { current: Step }) {
   const steps: Step[] = ['select', 'upload', 'minting', 'success'];
   const idx = steps.indexOf(current);
-  const displayIdx = idx >= 0 ? idx : (current === 'validating' ? 2 : current === 'error' ? 1 : 0);
+  const displayIdx = idx >= 0
+    ? idx
+    : (current === 'validating' ? 2 : current === 'ready' ? 2 : current === 'error' ? 1 : 0);
 
   return (
     <div className="flex items-center gap-2 mb-8">
