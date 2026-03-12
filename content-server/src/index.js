@@ -18,6 +18,7 @@ import { paymentMiddleware } from 'x402-express';
 import dotenv from 'dotenv';
 import { GUIDES, ROUTES, HOTELS } from './content.js';
 import { verifyStampToken } from './stamp-auth.js';
+import { getLiveRouteOptions } from './live-routes.js';
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -29,6 +30,8 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 const app       = express();
 const PORT      = process.env.PORT || 3001;
 const DEMO_MODE = process.env.DEMO_MODE === 'true' || process.env.NODE_ENV === 'development';
+const ROUTE_DATA_MODE = (process.env.ROUTE_DATA_MODE || 'demo').toLowerCase(); // demo | live
+const RAIL_API_BASE_URL = process.env.RAIL_API_BASE_URL || 'https://v6.db.transport.rest';
 
 const FACILITATOR = { url: process.env.X402_FACILITATOR_URL || 'https://x402.org/facilitator' };
 const NETWORK      = process.env.X402_NETWORK || 'base-sepolia';
@@ -181,18 +184,38 @@ app.get('/guides/:slug', (req, res) => {
  */
 app.get('/routes/carbon-optimal', (req, res) => {
   const { from = 'London', to = 'Paris', date = '2026-03-15' } = req.query;
-  const route = ROUTES.find(
-    r => r.from.toLowerCase() === from.toLowerCase()
-      && r.to.toLowerCase() === to.toLowerCase()
-  ) || ROUTES[0];
+  (async () => {
+    // Live mode: attempt rail API first, then fall back to demo dataset.
+    if (ROUTE_DATA_MODE === 'live') {
+      try {
+        const live = await getLiveRouteOptions({
+          from: String(from),
+          to: String(to),
+          date: typeof date === 'string' ? date : undefined,
+          railApiBaseUrl: RAIL_API_BASE_URL,
+        });
+        return res.json({ ok: true, ...live });
+      } catch {
+        // fall back below
+      }
+    }
 
-  res.json({
-    ok: true,
-    query: { from, to, date },
-    routes: route.options,
-    carbonSaved: route.carbonSaved,
-    dataSource: 'EcoStamp Oracle v1 + ADEME transport emission factors',
-    paidAt: new Date().toISOString(),
+    const route = ROUTES.find(
+      r => r.from.toLowerCase() === String(from).toLowerCase()
+        && r.to.toLowerCase() === String(to).toLowerCase()
+    ) || ROUTES[0];
+
+    res.json({
+      ok: true,
+      query: { from, to, date },
+      routes: route.options,
+      carbonSaved: route.carbonSaved,
+      dataSource: 'EcoStamp Oracle v1 + ADEME transport emission factors',
+      paidAt: new Date().toISOString(),
+      demoMode: true,
+    });
+  })().catch(() => {
+    res.status(500).json({ error: 'Failed to compute routes' });
   });
 });
 

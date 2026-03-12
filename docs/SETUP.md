@@ -37,6 +37,10 @@ X402_NETWORK=base-sepolia
 NEXT_PUBLIC_X402_NETWORK=base-sepolia
 CONTENT_SERVER_URL=http://localhost:3001
 
+# Route planner
+ROUTE_DATA_MODE=demo
+RAIL_API_BASE_URL=https://v6.db.transport.rest
+
 # Demo mode (no real USDC settlement)
 DEMO_MODE=true
 NEXT_PUBLIC_DEMO_MODE=true
