@@ -19,6 +19,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { addActivity } from '@/lib/activity';
+import { ensureEvmChain, evmChainId, evmChainLabel } from '@/lib/evm';
 
 export type X402State =
   | { status: 'idle' }
@@ -86,6 +87,8 @@ async function signUSDCPermit(
 
   if (!window.ethereum) throw new Error('No EVM wallet detected. Install MetaMask or Coinbase Wallet.');
 
+  await ensureEvmChain(network as any);
+
   const client = createWalletClient({
     chain:     chainModule,
     transport: custom(window?.ethereum),
@@ -95,7 +98,9 @@ async function signUSDCPermit(
   if (!accounts.length) throw new Error('No EVM accounts found. Connect your EVM wallet.');
   const from = accounts[0] as `0x${string}`;
 
-  const signature = await client.signTypedData({
+  let signature: `0x${string}`;
+  try {
+    signature = await client.signTypedData({
     account: from,
     domain: {
       name:              'USD Coin',
@@ -123,6 +128,13 @@ async function signUSDCPermit(
       nonce:       nonce as `0x${string}`,
     },
   });
+  } catch (e: any) {
+    if (String(e?.message || '').toLowerCase().includes('chainid')) {
+      const wanted = `${evmChainLabel(network as any)} (chainId ${evmChainId(network as any)})`;
+      throw new Error(`EVM wallet is on the wrong network. Switch to ${wanted} and try again.`);
+    }
+    throw e;
+  }
 
   return { from, signature, nonce, validAfter, validBefore };
 }

@@ -23,6 +23,7 @@ import { hiroTxUrl, stacksChain } from '@/lib/explorer';
 import { stacksNetwork } from '@/lib/stacks-network';
 import { fetchProviderForOwner, type ProviderRecord } from '@/lib/stacks';
 import { addActivity } from '@/lib/activity';
+import { ensureEvmChain, evmChainLabel, evmChainId } from '@/lib/evm';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,12 +102,16 @@ async function signUSDCPermit(
 
   if (!window.ethereum) throw new Error('No EVM wallet detected. Install MetaMask or Coinbase Wallet.');
 
+  await ensureEvmChain(network as any);
+
   const client = createWalletClient({ chain, transport: custom(window.ethereum) });
   const accounts = await client.requestAddresses();
   if (!accounts.length) throw new Error('No EVM accounts found. Connect your EVM wallet.');
   const from = accounts[0] as `0x${string}`;
 
-  const signature = await client.signTypedData({
+  let signature: `0x${string}`;
+  try {
+    signature = await client.signTypedData({
     account: from,
     domain: {
       name: 'USD Coin',
@@ -134,6 +139,13 @@ async function signUSDCPermit(
       nonce,
     },
   });
+  } catch (e: any) {
+    if (String(e?.message || '').toLowerCase().includes('chainid')) {
+      const wanted = `${evmChainLabel(network as any)} (chainId ${evmChainId(network as any)})`;
+      throw new Error(`EVM wallet is on the wrong network. Switch to ${wanted} and try again.`);
+    }
+    throw e;
+  }
 
   return { from, signature, nonce, validAfter, validBefore };
 }

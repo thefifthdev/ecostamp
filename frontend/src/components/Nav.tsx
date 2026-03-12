@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { IconLeaf, IconMenu, IconX, IconWallet } from './Icons';
+import { ensureEvmChain } from '@/lib/evm';
 
 type Section =
   | 'home'
@@ -98,8 +99,9 @@ export default function Nav({
         alert('No EVM wallet found. Install MetaMask or Coinbase Wallet.');
         return;
       }
+      const x402Network = (process.env.NEXT_PUBLIC_X402_NETWORK || 'base-sepolia') as any;
+      await ensureEvmChain(x402Network);
       const { createWalletClient, custom } = await import('viem');
-      const x402Network = process.env.NEXT_PUBLIC_X402_NETWORK || 'base-sepolia';
       const chain = x402Network === 'base'
         ? await import('viem/chains').then(m => m.base)
         : await import('viem/chains').then(m => m.baseSepolia);
