@@ -63,7 +63,9 @@ export async function POST(req: NextRequest) {
           message: 'Payment required. Sign the USDC permit in your wallet and retry.',
         },
         {
-          status: 402,
+          // Use 200 so the browser doesn't log "Failed to load resource" for
+          // expected payment challenges. Clients must branch on body.status.
+          status: 200,
           headers: {
             'X-PAYMENT-RESPONSE': upstream.headers.get('X-PAYMENT-RESPONSE') || '',
           },

@@ -158,17 +158,17 @@ async function payListingFee(): Promise<{ txid: string; paymentHeader: string }>
     body: JSON.stringify({ url: '/provider-listing-fee' }),
   });
 
+  const initJson = await init.json().catch(() => ({}));
+
   let accepts: any = null;
-  if (init.status === 402) {
-    const j = await init.json().catch(() => ({}));
+  if (init.status === 402 || initJson?.status === 402) {
+    const j = initJson?.payment ?? initJson;
     accepts = j?.payment?.accepts?.[0] ?? j?.accepts?.[0] ?? null;
   } else if (!init.ok) {
-    const err = await init.json().catch(() => ({}));
-    throw new Error(err.error || `Listing fee endpoint failed (${init.status})`);
+    throw new Error(initJson?.error || `Listing fee endpoint failed (${init.status})`);
   } else {
     // Already paid / unprotected (unlikely)
-    const ok = await init.json().catch(() => ({}));
-    return { txid: ok.paymentReceipt || randomHex(32), paymentHeader: '' };
+    return { txid: initJson.paymentReceipt || randomHex(32), paymentHeader: '' };
   }
 
   const payTo = String(accepts?.payTo ?? process.env.NEXT_PUBLIC_X402_WALLET ?? '').slice(0, 42);
@@ -216,7 +216,10 @@ async function payListingFee(): Promise<{ txid: string; paymentHeader: string }>
     body: JSON.stringify({ url: '/provider-listing-fee', paymentHeader }),
   });
   const payData = await payRes.json().catch(() => ({}));
-  if (!payRes.ok) throw new Error(payData.error || `Payment failed (${payRes.status})`);
+  if ((payData as any)?.status === 402) {
+    throw new Error('Payment required. Please approve the USDC signature in your EVM wallet and try again.');
+  }
+  if (!payRes.ok) throw new Error((payData as any)?.error || `Payment failed (${payRes.status})`);
 
   return { txid: payData.paymentReceipt || randomHex(32), paymentHeader };
 }

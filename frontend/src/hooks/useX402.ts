@@ -157,8 +157,10 @@ export function useX402({ walletAddress, stampToken }: UseX402Options) {
         body:    JSON.stringify({ url: path, stampToken }),
       });
 
-      if (res.status === 402) {
-        const paymentReq = await res.json();
+      const maybeJson = await res.json().catch(() => ({}));
+
+      if (res.status === 402 || maybeJson?.status === 402) {
+        const paymentReq = maybeJson?.payment ?? maybeJson;
         paymentReqRef.current = { path, paymentReq };
 
         const accepts   = paymentReq.payment?.accepts?.[0] ?? paymentReq.accepts?.[0];
@@ -177,12 +179,12 @@ export function useX402({ walletAddress, stampToken }: UseX402Options) {
       }
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+        const err = maybeJson ?? {};
         setState({ status: 'error', message: err.error || `Request failed (${res.status})` });
         return;
       }
 
-      const data = await res.json();
+      const data = maybeJson;
       setState({ status: 'success', data, paidAt: data.paidAt ?? new Date().toISOString() });
 
     } catch (err: any) {
@@ -268,13 +270,33 @@ export function useX402({ walletAddress, stampToken }: UseX402Options) {
         body:    JSON.stringify({ url: ref.path, stampToken, paymentHeader: encoded }),
       });
 
+      const maybeJson = await res.json().catch(() => ({}));
+
+      // Payment challenge again (invalid signature / wrong chain / etc)
+      if (res.status === 402 || maybeJson?.status === 402) {
+        const paymentReq = maybeJson?.payment ?? maybeJson;
+        paymentReqRef.current = { path: ref.path, paymentReq };
+        const accepts   = paymentReq.payment?.accepts?.[0] ?? paymentReq.accepts?.[0];
+        const rawAmount = accepts?.maxAmountRequired ?? value;
+        const price     = rawAmount.toString().startsWith('$')
+          ? rawAmount
+          : `$${(Number(rawAmount) / 1_000_000).toFixed(4)}`;
+        setState({
+          status:      'payment_required',
+          price,
+          description: paymentReq.payment?.description ?? accepts?.description ?? 'Payment required',
+          network:     accepts?.network ?? String(network),
+        });
+        return;
+      }
+
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+        const err = maybeJson ?? {};
         setState({ status: 'error', message: err.error || `Payment failed (${res.status})` });
         return;
       }
 
-      const data = await res.json();
+      const data = maybeJson;
       const paidAt = data.paidAt ?? new Date().toISOString();
       setState({ status: 'success', data, paidAt });
 
