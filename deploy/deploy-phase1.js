@@ -6,8 +6,10 @@
 
 const {
   makeContractDeploy,
+  makeContractCall,
   getAddressFromPrivateKey,
   TransactionVersion,
+  principalCV,
 } = require('@stacks/transactions');
 const { StacksMainnet, StacksTestnet } = require('@stacks/network');
 const fs   = require('fs');
@@ -50,6 +52,30 @@ async function getCurrentNonce(address) {
 function estimateFee(codeBody) {
   const bytes = Buffer.from(codeBody, 'utf-8').length;
   return Math.ceil((5_000 + bytes * 10) * GAS_BUFFER);
+}
+
+async function callContract(contractId, functionName, functionArgs, nonce) {
+  const [contractAddress, contractName] = contractId.split('.');
+  const fee = Math.ceil(5_000 * GAS_BUFFER);
+  console.log(`\n  ${bold('→')} call ${cyan(contractName + '.' + functionName)}   nonce: ${nonce}`);
+  const tx = await makeContractCall({
+    contractAddress,
+    contractName,
+    functionName,
+    functionArgs,
+    senderKey: PRIVATE_KEY,
+    network: NETWORK,
+    anchorMode: 3,
+    postConditionMode: 1,
+    fee,
+    nonce,
+  });
+  const txId = await broadcastRaw(tx);
+  console.log(`     ${green('✓')} broadcast: ${dim(txId)}`);
+  console.log(`     ${dim('⏳ Waiting for confirmation...')}`);
+  const result = await pollTx(txId);
+  if (!result.ok) throw new Error(`TX failed on-chain: ${result.reason}`);
+  return txId;
 }
 
 /**
@@ -249,6 +275,29 @@ async function main() {
     const envPath = path.join(__dirname, '../frontend/.env.contracts');
     fs.writeFileSync(envPath, envLines.join('\n') + '\n');
     console.log(`  🔗 Contract addresses → ${dim(envPath)}`);
+
+    // Wire cross-contract pointers for Phase 5 checks:
+    // - stamp-registry.set-provider-registry(provider-registry)
+    // - provider-registry.set-stamp-registry(stamp-registry)
+    try {
+      const provider = results.deployed.find(d => d.contractName === 'provider-registry')?.address;
+      const stamp    = results.deployed.find(d => d.contractName === 'stamp-registry')?.address;
+      if (provider && stamp) {
+        console.log(`\n  ${dim(`⏸  Waiting ${DEPLOY_DELAY_MS / 1000}s before wiring contracts...`)}`);
+        await sleep(DEPLOY_DELAY_MS);
+
+        await callContract(stamp, 'set-provider-registry', [principalCV(provider)], nonce++);
+        await sleep(DEPLOY_DELAY_MS);
+        await callContract(provider, 'set-stamp-registry', [principalCV(stamp)], nonce++);
+
+        console.log(`\n  ${green('✅')} Wired provider-registry <-> stamp-registry`);
+      }
+    } catch (e) {
+      console.warn(`\n  ⚠  Wiring skipped/failed: ${e.message}`);
+      console.warn(dim('     You can wire manually:'));
+      console.warn(dim('       stamp-registry set-provider-registry <provider-registry-principal>'));
+      console.warn(dim('       provider-registry set-stamp-registry <stamp-registry-principal>'));
+    }
   }
 
   console.log('═'.repeat(60) + '\n');

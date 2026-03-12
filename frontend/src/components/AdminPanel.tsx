@@ -21,6 +21,9 @@ import {
   IconShield, IconCheckCircle, IconX, IconZap, IconKey,
   IconLeaf, IconSearch, IconBitcoin, CategoryIcon,
 } from './Icons';
+import { hiroTxUrl } from '@/lib/explorer';
+import { stacksNetwork } from '@/lib/stacks-network';
+import { bufferCvFromHex } from '@/lib/clarity';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -111,7 +114,7 @@ async function callContract(
       openContractCall({
         contractAddress: addr, contractName: name,
         functionName: fn, functionArgs: args,
-        network:    process.env.NEXT_PUBLIC_STACKS_NETWORK === 'mainnet' ? 'mainnet' : 'testnet',
+        network:    stacksNetwork(),
         appDetails: { name: 'EcoStamp', icon: '/icon.png' },
         onFinish:   (d: any) => resolve(d.txId ?? d.txid ?? 'pending'),
         onCancel:   () => reject(new Error('cancelled')),
@@ -153,13 +156,10 @@ function ApproveModal({
     if (!keyHash || keyHash.length < 10) { setError('Enter or generate a signing key hash'); return; }
     setPending(true); setError('');
     try {
-      const { bufferCV, uintCV } = await import('@stacks/transactions');
-      // Encode keyHash as 32-byte buffer
-      const hashBytes = keyHash.replace('0x', '').slice(0, 64).padEnd(64, '0');
-      const buf = Buffer.from(hashBytes, 'hex');
+      const { uintCV } = await import('@stacks/transactions');
       const txid = await callContract(
         'approve-provider',
-        [uintCV(provider.id), bufferCV(buf)],
+        [uintCV(provider.id), bufferCvFromHex(keyHash)],
         'NEXT_PUBLIC_PROVIDER_REGISTRY_ADDRESS',
       );
       onApproved(provider.id, keyHash, txid);
@@ -202,7 +202,7 @@ function ApproveModal({
             </button>
           </div>
           <p className="text-xs text-sage-600">
-            This is the keccak256 of the provider's secp256k1 public key. Generate here for demo — in production the provider generates their own key pair.
+            This is sha256(compressed secp256k1 public key). Generate here for demo — in production the provider generates their own key pair.
           </p>
         </div>
 
@@ -273,7 +273,7 @@ function PoolSeedPanel() {
       {txid && (
         <div className="flex items-center gap-2 text-xs text-glow-400">
           <IconCheckCircle size={14} />
-          <a href={`https://explorer.hiro.so/txid/${txid}?chain=testnet`}
+          <a href={hiroTxUrl(txid)}
              target="_blank" rel="noopener noreferrer" className="underline">
             Pool seeded · view tx ↗
           </a>
@@ -296,12 +296,14 @@ export default function AdminPanel({ walletAddress }: { walletAddress: string | 
   const [approving, setApproving] = useState<Provider | null>(null);
   const [pendingTxs, setPendingTxs] = useState<Record<number, string>>({});
 
-  const verifierAddress = process.env.NEXT_PUBLIC_VERIFIER_ADDRESS || '';
-  const isVerifier = !verifierAddress || walletAddress === verifierAddress;
+  // Admin address: single source of truth from NEXT_PUBLIC_ADMIN_ADDRESS.
+  // Fail-closed: if blank, nobody can access admin.
+  const adminAddress = (process.env.NEXT_PUBLIC_ADMIN_ADDRESS || '').trim();
+  const isAdmin = adminAddress !== '' && walletAddress === adminAddress;
 
-  // ── Access gate ────────────────────────────────────────────────────────────
+  // ── Access gate (belt-and-suspenders: page.tsx also guards this route) ─────
 
-  if (!walletAddress) {
+  if (!walletAddress || !isAdmin) {
     return (
       <section className="min-h-[calc(100vh-64px)] flex items-center justify-center px-4 page-enter">
         <div className="text-center">
@@ -309,22 +311,14 @@ export default function AdminPanel({ walletAddress }: { walletAddress: string | 
             <IconShield size={32} className="text-sage-400" />
           </div>
           <h3 className="font-display text-2xl text-cream-200 mb-3">Admin access</h3>
-          <p className="text-sage-400 max-w-sm">Connect the verifier wallet to access the admin panel.</p>
-        </div>
-      </section>
-    );
-  }
-
-  if (!isVerifier) {
-    return (
-      <section className="min-h-[calc(100vh-64px)] flex items-center justify-center px-4 page-enter">
-        <div className="text-center">
-          <div className="w-16 h-16 rounded-2xl glass flex items-center justify-center mb-6 mx-auto">
-            <IconX size={32} className="text-red-400" />
-          </div>
-          <h3 className="font-display text-2xl text-cream-200 mb-3">Unauthorized</h3>
-          <p className="text-sage-400">Connected wallet is not the designated verifier.</p>
-          <p className="text-sage-600 text-xs mt-2 font-mono">{truncate(walletAddress, 20)}</p>
+          <p className="text-sage-400 max-w-sm">
+            {!walletAddress
+              ? 'Connect the admin wallet to access this panel.'
+              : 'Connected wallet does not match NEXT_PUBLIC_ADMIN_ADDRESS.'}
+          </p>
+          {walletAddress && (
+            <p className="text-sage-600 text-xs mt-2 font-mono">{truncate(walletAddress, 20)}</p>
+          )}
         </div>
       </section>
     );
@@ -477,7 +471,7 @@ export default function AdminPanel({ walletAddress }: { walletAddress: string | 
                         )}
                         {pendingTxs[p.id] && (
                           <a
-                            href={`https://explorer.hiro.so/txid/${pendingTxs[p.id]}?chain=testnet`}
+                            href={hiroTxUrl(pendingTxs[p.id])}
                             target="_blank" rel="noopener noreferrer"
                             className="text-xs text-glow-300 underline mt-1 inline-block"
                           >

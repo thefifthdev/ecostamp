@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { CategoryIcon, IconGlobe, IconWallet, IconAward } from './Icons';
+import { hiroTxUrl } from '@/lib/explorer';
+import { CONTRACTS, tierName } from '@/lib/stacks';
+import { fetchEarnStampTxs, getProviderCached } from '@/lib/hiro';
 
 interface Stamp {
   id: number;
@@ -118,6 +121,7 @@ function StampCard({ stamp, index }: { stamp: Stamp; index: number }) {
               <Row label="Eco Score" value={`${stamp.ecoScore}/100`} />
               <Row label="Points" value={`+${stamp.points}`} />
               <Row label="Minted" value={stamp.mintedAt} />
+              <Row label="Booking" value={`${stamp.bookingHash.slice(0, 10)}…${stamp.bookingHash.slice(-6)}`} />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -125,13 +129,13 @@ function StampCard({ stamp, index }: { stamp: Stamp; index: number }) {
               TX: {stamp.txId}
             </div>
             <a
-              href={`https://explorer.stacks.co/txid/${stamp.txId}?chain=testnet`}
+              href={hiroTxUrl(stamp.txId)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[10px] text-glow-400 hover:text-glow-300 transition-colors"
               onClick={e => e.stopPropagation()}
             >
-              View on Stacks Explorer ↗
+              View on Hiro Explorer ↗
             </a>
           </div>
         </div>
@@ -144,7 +148,7 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between items-center">
       <span className="text-xs text-sage-500">{label}</span>
-      <span className="text-xs text-cream-300 font-medium capitalize">{value}</span>
+      <span className="text-xs text-cream-300 font-medium">{value}</span>
     </div>
   );
 }
@@ -155,17 +159,56 @@ export default function StampGallery({ walletAddress }: { walletAddress: string 
   const [filter, setFilter] = useState<string>('all');
 
   useEffect(() => {
-    // Simulate loading stamps from chain / API
-    const t = setTimeout(() => {
-      setStamps(walletAddress ? DEMO_STAMPS : []);
-      setLoading(false);
-    }, 800);
-    return () => clearTimeout(t);
+    let mounted = true;
+    (async () => {
+      if (!walletAddress) {
+        setStamps([]);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        // If contracts aren't configured, fall back to demo stamps for the hackathon UI.
+        if (!CONTRACTS.stampRegistry) {
+          setStamps(DEMO_STAMPS);
+          setLoading(false);
+          return;
+        }
+
+        const txs = await fetchEarnStampTxs(walletAddress, 50);
+        const hydrated: Stamp[] = [];
+        for (let i = 0; i < txs.length; i++) {
+          const tx = txs[i];
+          const prov = await getProviderCached(tx.providerId);
+          hydrated.push({
+            id: i + 1,
+            providerName: prov?.name || `Provider #${tx.providerId}`,
+            category: prov?.category || 'activity',
+            ecoScore: prov?.ecoScore || 0,
+            points: tx.ecoPoints || 0,
+            mintedAt: new Date(tx.mintedAt).toLocaleDateString(),
+            txId: tx.txId,
+            bookingHash: tx.bookingHash,
+          });
+        }
+
+        if (!mounted) return;
+        setStamps(hydrated);
+        setLoading(false);
+      } catch {
+        if (!mounted) return;
+        setStamps(DEMO_STAMPS);
+        setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
   }, [walletAddress]);
 
-  const categories = ['all', ...Array.from(new Set(DEMO_STAMPS.map(s => s.category)))];
+  const categories = ['all', ...Array.from(new Set(stamps.map(s => s.category)))];
   const filtered = filter === 'all' ? stamps : stamps.filter(s => s.category === filter);
   const totalPoints = stamps.reduce((acc, s) => acc + s.points, 0);
+  const tier = totalPoints >= 60 ? 2 : totalPoints >= 20 ? 1 : 0;
 
   return (
     <section className="min-h-[calc(100vh-64px)] px-4 sm:px-6 lg:px-8 py-12 page-enter">
@@ -198,7 +241,7 @@ export default function StampGallery({ walletAddress }: { walletAddress: string 
               {[
                 { label: 'Total Stamps', value: stamps.length },
                 { label: 'Eco Points',   value: totalPoints   },
-                { label: 'Tier', value: totalPoints >= 60 ? 'Gold' : totalPoints >= 20 ? 'Silver' : 'Bronze' },
+                { label: 'Tier', value: tierName(tier) },
               ].map(stat => (
                 <div key={stat.label} className="glass rounded-2xl p-4 text-center">
                   <div className="font-display text-2xl text-glow-300">{stat.value}</div>

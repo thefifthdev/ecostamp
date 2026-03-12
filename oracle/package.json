@@ -1,0 +1,23 @@
+{
+  "name": "ecostamp-oracle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EcoStamp oracle signing service (secp256k1 booking proofs)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "keygen": "node src/keygen.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "secp256k1": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

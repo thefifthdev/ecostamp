@@ -75,7 +75,13 @@ const CATEGORY_ICON: Record<string, React.FC<any>> = {
 
 // ── Main component ────────────────────────────────────────────────────────
 
-export default function Guides({ walletAddress }: { walletAddress: string | null }) {
+export default function Guides({
+  walletAddress,
+  evmAddress: _evmAddress,
+}: {
+  walletAddress: string | null;
+  evmAddress?: string | null;
+}) {
   const [activeTab, setActiveTab]           = useState<'guides' | 'routes'>('guides');
   const [selectedGuide, setSelectedGuide]   = useState<GuidePreview | null>(null);
   const [routeFrom, setRouteFrom]           = useState('London');

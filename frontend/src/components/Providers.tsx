@@ -1,9 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CategoryIcon, IconLeaf, IconVerified, IconSearch, IconArrowRight, IconX } from './Icons';
+import { fetchProviders, type ProviderRecord } from '@/lib/stacks';
 
-const ALL_PROVIDERS = [
+interface ProviderCard {
+  id: number;
+  name: string;
+  category: string;
+  ecoScore: number;
+  stamps: number;
+  country: string;
+  verified: boolean;
+  desc: string;
+}
+
+const FALLBACK_PROVIDERS: ProviderCard[] = [
   { id: 1, name: 'The Green Lodge',       category: 'hotel',     ecoScore: 92, stamps: 284, country: 'Norway',  verified: true,  desc: 'Carbon-neutral mountain retreat powered by hydroelectric energy.' },
   { id: 2, name: 'EcoRail Europe',        category: 'train',     ecoScore: 97, stamps: 512, country: 'Germany', verified: true,  desc: '100% renewable energy rail network across 12 European countries.' },
   { id: 3, name: 'GreenWings Air',        category: 'airline',   ecoScore: 78, stamps: 198, country: 'Sweden',  verified: true,  desc: 'SAF-certified flights with verified carbon offset programmes.' },
@@ -14,14 +26,52 @@ const ALL_PROVIDERS = [
   { id: 8, name: 'Blue Line Ferries',     category: 'cruise',    ecoScore: 81, stamps: 102, country: 'Greece',  verified: true,  desc: 'LNG-powered ferry operator with hull-fouling reduction technology.' },
 ];
 
-const CATEGORIES = ['all', 'hotel', 'train', 'airline', 'car-share', 'activity', 'cruise'];
-
 export default function Providers() {
+  const [providers, setProviders] = useState<ProviderCard[]>(FALLBACK_PROVIDERS);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter]   = useState('all');
   const [search, setSearch]   = useState('');
-  const [selected, setSelected] = useState<typeof ALL_PROVIDERS[0] | null>(null);
+  const [selected, setSelected] = useState<ProviderCard | null>(null);
 
-  const filtered = ALL_PROVIDERS.filter(p =>
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      const chain = await fetchProviders().catch(() => []);
+      if (!mounted) return;
+      if (!chain.length) {
+        setProviders(FALLBACK_PROVIDERS);
+        setLoading(false);
+        return;
+      }
+
+      // Provider registry doesn't store country/desc yet; keep tasteful placeholders.
+      const mapped = chain.map((p: ProviderRecord) => ({
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        ecoScore: p.ecoScore,
+        stamps: p.stampsIssued,
+        country: '—',
+        verified: p.status === 'approved',
+        desc: p.status === 'approved'
+          ? 'Verified EcoStamp provider on-chain.'
+          : p.status === 'pending'
+            ? 'Application pending verifier review.'
+            : 'Provider revoked. New stamps cannot be issued.',
+      }));
+      setProviders(mapped);
+      setLoading(false);
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  const categories = useMemo(() => {
+    const cats = Array.from(new Set(providers.map(p => p.category)));
+    return ['all', ...cats];
+  }, [providers]);
+
+  const filtered = providers.filter(p =>
     (filter === 'all' || p.category === filter) &&
     (p.name.toLowerCase().includes(search.toLowerCase()) || p.country.toLowerCase().includes(search.toLowerCase()))
   );
@@ -45,7 +95,7 @@ export default function Providers() {
             className="eco-input flex-1 max-w-sm"
           />
           <div className="flex flex-wrap gap-2">
-            {CATEGORIES.map(cat => (
+            {categories.map(cat => (
               <button
                 key={cat}
                 onClick={() => setFilter(cat)}
@@ -62,6 +112,14 @@ export default function Providers() {
         </div>
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {loading && (
+            <>
+              {[...Array(8)].map((_, i) => (
+                <div key={i} className="h-[224px] rounded-3xl glass shimmer" />
+              ))}
+            </>
+          )}
+
           {filtered.map((p, i) => (
             <button
               key={p.id}

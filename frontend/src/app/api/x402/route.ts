@@ -80,7 +80,8 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await upstream.json();
-    return NextResponse.json(data);
+    const paymentReceipt = upstream.headers.get('X-PAYMENT-RESPONSE') || '';
+    return NextResponse.json({ ...data, paymentReceipt: paymentReceipt || undefined });
 
   } catch (err: any) {
     return NextResponse.json(

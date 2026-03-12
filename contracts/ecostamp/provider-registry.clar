@@ -43,7 +43,7 @@
     eco-score:    uint,                ;; 1-100
     status:       uint,                ;; 0=pending 1=approved 2=revoked
     owner:        principal,
-    signing-key-hash: (optional (buff 32)),  ;; keccak256 of pub key, set on approval
+    signing-key-hash: (optional (buff 32)),  ;; sha256(compressed-pubkey), set on approval
     registered-at:    uint,            ;; block height
     approved-at:      (optional uint),
     stamps-issued:    uint,
@@ -56,6 +56,9 @@
   { provider-id: uint }
 )
 
+;; Stamp registry contract allowed to increment stamps-issued (wired post-deploy)
+(define-data-var stamp-registry-contract principal CONTRACT_OWNER)
+
 ;; --- Read-only helpers --------------------------------------------------------
 (define-read-only (get-provider (provider-id uint))
   (map-get? providers { provider-id: provider-id })
@@ -66,6 +69,10 @@
     entry (get-provider (get provider-id entry))
     none
   )
+)
+
+(define-read-only (get-provider-id-by-owner (owner principal))
+  (map-get? owner-to-provider { owner: owner })
 )
 
 (define-read-only (get-next-id)
@@ -104,6 +111,8 @@
     )
     ;; Each wallet can only have one provider application
     (asserts! (is-none (map-get? owner-to-provider { owner: caller })) ERR_ALREADY_EXISTS)
+    ;; Category must be in VALID_CATEGORIES
+    (asserts! (is-some (index-of? VALID_CATEGORIES category)) ERR_INVALID_CATEGORY)
     ;; Eco score must be 1-100
     (asserts! (and (>= eco-score u1) (<= eco-score u100)) ERR_INVALID_ECO_SCORE)
 
@@ -177,14 +186,34 @@
 (define-public (increment-stamps-issued (provider-id uint))
   (let ((provider (unwrap! (get-provider provider-id) ERR_NOT_FOUND)))
     ;; Only stamp-registry contract can call this in production;
-    ;; For hackathon we allow the verifier to call it.
-    (asserts! (is-eq tx-sender (var-get verifier-address)) ERR_UNAUTHORIZED)
+    ;; For hackathon we also allow the verifier to call it.
+    (asserts!
+      (or
+        (is-eq tx-sender (var-get verifier-address))
+        (is-eq contract-caller (var-get stamp-registry-contract))
+      )
+      ERR_UNAUTHORIZED
+    )
     (map-set providers
       { provider-id: provider-id }
       (merge provider { stamps-issued: (+ (get stamps-issued provider) u1) })
     )
     (ok true)
   )
+)
+
+;; Owner-only: set stamp registry contract principal
+(define-public (set-stamp-registry (new-stamp-registry principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set stamp-registry-contract new-stamp-registry)
+    (ok true)
+  )
+)
+
+;; Read-only: current stamp registry principal
+(define-read-only (get-stamp-registry)
+  (var-get stamp-registry-contract)
 )
 
 ;; Owner-only: rotate verifier wallet

@@ -1,140 +1,91 @@
 'use client';
 
 /**
- * useRewardPool -- reward pool state + epoch registration + claim tx handler.
+ * useRewardPool — reads Impact Dashboard state from Stacks contracts and
+ * broadcasts claim transactions via Leather/Xverse.
  *
- * Interface matches ImpactDashboard:
- *   state.pool             -- { totalSbtc, claimantCount, settled }
- *   state.registered       -- wallet has registered for current epoch
- *   state.hasClaimed       -- wallet has claimed in current epoch
- *   state.claimableAmount  -- sats the wallet can claim right now
- *   state.currentEpoch     -- epoch counter (block / EPOCH_BLOCKS)
- *   state.blocksUntilEpoch -- blocks until next epoch opens
- *   state.txId             -- last tx id (register or claim)
- *   state.txPending        -- tx broadcast but not yet confirmed
- *   state.loading          -- chain read in progress
- *
- * Falls back to demo state when contracts are not deployed.
- * Polls chain every 30s when wallet is connected.
+ * Falls back to demo values if contracts are not configured or unreachable.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  fetchRewardSummary, fetchTier, fetchStampCount,
-  CONTRACTS, satsToDisplay,
+  CONTRACTS,
+  fetchEcoPoints,
+  fetchRewardSummary,
+  fetchStampCount,
+  fetchTier,
+  tierName,
+  type RewardSummary,
 } from '@/lib/stacks';
+import { stacksNetwork } from '@/lib/stacks-network';
+import { addActivity } from '@/lib/activity';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface EpochPool {
-  totalSbtc:     number;
-  claimantCount: number;
-  settled:       boolean;
+function randomHex(bytes: number): string {
+  const arr = new Uint8Array(bytes);
+  crypto.getRandomValues(arr);
+  return '0x' + Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-interface RewardPoolState {
-  loading:         boolean;
-  pool:            EpochPool | null;
-  registered:      boolean;
-  hasClaimed:      boolean;
-  claimableAmount: number;
-  currentEpoch:    number;
-  blocksUntilEpoch: number;
-  txId:            string | null;
-  txPending:       boolean;
-  tier:            number;
-  stampCount:      number;
+function demoSummary(tier: number): RewardSummary {
+  const poolBalance = 42_000_000;
+  const claimable = tier >= 2 ? Math.floor(poolBalance * 0.07) : tier >= 1 ? Math.floor(poolBalance * 0.03) : 0;
+  return {
+    claimable,
+    poolBalance,
+    totalDeposited: poolBalance,
+    totalClaimed: 0,
+    userTotalClaimed: 0,
+    claimCount: 0,
+    cooldownBlocks: 0,
+    canClaim: claimable > 0,
+  };
 }
 
-const EPOCH_BLOCKS = 1008; // ~1 week at 10 min/block; use 10 on testnet demos
+export function useRewardPool(walletAddress: string | null) {
+  const [loading, setLoading] = useState(false);
+  const [tier, setTier] = useState(0);
+  const [stampCount, setStampCount] = useState(0);
+  const [ecoPoints, setEcoPointsState] = useState(0);
+  const [summary, setSummary] = useState<RewardSummary | null>(null);
 
-// ── Demo fallback state ───────────────────────────────────────────────────────
+  const [claiming, setClaiming] = useState(false);
+  const [claimTxid, setClaimTxid] = useState<string | null>(null);
+  const [claimError, setClaimError] = useState<string | null>(null);
 
-function makeDemoState(tier: number, stampCount: number): Partial<RewardPoolState> {
-  const pool: EpochPool = { totalSbtc: 42_000_000, claimantCount: 7, settled: false };
-  // Demo: claimable only for silver+ to make the UI interesting
-  const claimableAmount = tier >= 1 ? Math.floor(42_000_000 * (tier === 2 ? 0.07 : 0.03)) : 0;
-  return { pool, registered: false, hasClaimed: false, claimableAmount };
-}
-
-// ── Hook ──────────────────────────────────────────────────────────────────────
-
-export function useRewardPool(
-  walletAddress: string | null,
-  ecoPoints:     number = 0,
-  stampCount:    number = 0,
-) {
-  const [state, setState] = useState<RewardPoolState>({
-    loading:          false,
-    pool:             null,
-    registered:       false,
-    hasClaimed:       false,
-    claimableAmount:  0,
-    currentEpoch:     0,
-    blocksUntilEpoch: 0,
-    txId:             null,
-    txPending:        false,
-    tier:             0,
-    stampCount:       0,
-  });
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ── Chain read ─────────────────────────────────────────────────────────────
 
   const refresh = useCallback(async () => {
     if (!walletAddress) return;
-    setState(s => ({ ...s, loading: true }));
-
+    setLoading(true);
     try {
-      const [tier, sc] = await Promise.all([
+      const [t, sc, ep] = await Promise.all([
         fetchTier(walletAddress),
         fetchStampCount(walletAddress),
+        fetchEcoPoints(walletAddress),
       ]);
-      const summary = await fetchRewardSummary(walletAddress, tier);
+      setTier(t);
+      setStampCount(sc);
+      setEcoPointsState(ep);
 
-      // Derive epoch info from cooldown data
-      // If cooldownBlocks > 0 the wallet already claimed this epoch
-      const hasClaimed      = summary.claimCount > 0 && summary.cooldownBlocks > 0;
-      const blocksUntilNext = hasClaimed ? summary.cooldownBlocks : 0;
-      const currentEpoch    = Math.floor(Date.now() / (EPOCH_BLOCKS * 10 * 60 * 1000));
-
-      const pool: EpochPool = {
-        totalSbtc:     summary.poolBalance,
-        claimantCount: summary.claimCount,  // proxy until we add a proper counter
-        settled:       summary.canClaim || hasClaimed,
-      };
-
-      setState(s => ({
-        ...s,
-        loading:          false,
-        pool,
-        registered:       summary.claimCount > 0 || summary.canClaim,
-        hasClaimed,
-        claimableAmount:  summary.claimable,
-        currentEpoch,
-        blocksUntilEpoch: blocksUntilNext,
-        tier,
-        stampCount:       sc,
-        txPending:        false,
-      }));
+      const s = await fetchRewardSummary(walletAddress, t);
+      setSummary(s);
+      setLoading(false);
     } catch {
-      // Contract not deployed — use demo state
-      const tier = ecoPoints >= 60 ? 2 : ecoPoints >= 20 ? 1 : 0;
-      setState(s => ({
-        ...s,
-        loading: false,
-        tier,
-        stampCount,
-        ...makeDemoState(tier, stampCount),
-        currentEpoch:     1,
-        blocksUntilEpoch: 504,
-      }));
+      const t = ecoPoints >= 60 ? 2 : ecoPoints >= 20 ? 1 : 0;
+      setTier(t);
+      setStampCount(stampCount);
+      setSummary(demoSummary(t));
+      setLoading(false);
     }
   }, [walletAddress, ecoPoints, stampCount]);
 
   useEffect(() => {
     if (!walletAddress) {
-      setState(s => ({ ...s, pool: null, registered: false, hasClaimed: false, claimableAmount: 0 }));
+      setLoading(false);
+      setTier(0);
+      setStampCount(0);
+      setEcoPointsState(0);
+      setSummary(null);
       return;
     }
     refresh();
@@ -142,97 +93,78 @@ export function useRewardPool(
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [walletAddress, refresh]);
 
-  // ── Register claimant ──────────────────────────────────────────────────────
-  // In Phase 3, reward-pool.clar uses claim-reward directly (no separate register).
-  // This button registers intent and sets a local flag for UI feedback.
-
-  const registerClaimant = useCallback(async () => {
-    if (!walletAddress) return;
-    setState(s => ({ ...s, txPending: true }));
-
-    try {
-      const { openContractCall } = await import('@stacks/connect');
-      const { uintCV }           = await import('@stacks/transactions');
-      const [contractAddress, contractName] =
-        (CONTRACTS.rewardPool || `${walletAddress}.reward-pool`).split('.');
-
-      await openContractCall({
-        contractAddress,
-        contractName,
-        functionName:  'deposit-reward',
-        functionArgs:  [uintCV(0), uintCV(0)], // zero-deposit to register intent
-        network:       process.env.NEXT_PUBLIC_STACKS_NETWORK === 'mainnet' ? 'mainnet' : 'testnet',
-        appDetails:    { name: 'EcoStamp', icon: '/icon.png' },
-        onFinish: (data: any) => {
-          const txId = data.txId ?? data.txid ?? 'pending';
-          setState(s => ({ ...s, txPending: false, txId, registered: true }));
-          setTimeout(refresh, 12_000);
-        },
-        onCancel: () => setState(s => ({ ...s, txPending: false })),
-      });
-    } catch {
-      // Demo fallback
-      await new Promise(r => setTimeout(r, 1500));
-      const demoTxid = '0x' + Array.from(
-        crypto.getRandomValues(new Uint8Array(32))
-      ).map(b => b.toString(16).padStart(2, '0')).join('');
-      setState(s => ({
-        ...s, txPending: false, txId: demoTxid, registered: true,
-        pool: s.pool ? { ...s.pool, claimantCount: s.pool.claimantCount + 1 } : null,
-      }));
-    }
-  }, [walletAddress, refresh]);
-
-  // ── Claim reward ───────────────────────────────────────────────────────────
+  const clearClaimState = useCallback(() => {
+    setClaimTxid(null);
+    setClaimError(null);
+  }, []);
 
   const claimReward = useCallback(async () => {
-    if (!walletAddress || state.hasClaimed) return;
-    setState(s => ({ ...s, txPending: true, txId: null }));
+    if (!walletAddress) return;
+    if (claiming) return;
+    if (!summary?.canClaim) return;
+
+    setClaiming(true);
+    setClaimError(null);
+    setClaimTxid(null);
 
     try {
+      if (!CONTRACTS.rewardPool || !CONTRACTS.rewardPool.includes('.')) {
+        await new Promise(r => setTimeout(r, 1200));
+        setClaimTxid(randomHex(32));
+        setClaiming(false);
+        return;
+      }
+
+      const [contractAddress, contractName] = CONTRACTS.rewardPool.split('.');
       const { openContractCall } = await import('@stacks/connect');
-      const { uintCV }           = await import('@stacks/transactions');
-      const [contractAddress, contractName] =
-        (CONTRACTS.rewardPool || `${walletAddress}.reward-pool`).split('.');
+      const { uintCV } = await import('@stacks/transactions');
 
-      await openContractCall({
-        contractAddress,
-        contractName,
-        functionName:  'claim-reward',
-        functionArgs:  [uintCV(state.tier)],
-        network:       process.env.NEXT_PUBLIC_STACKS_NETWORK === 'mainnet' ? 'mainnet' : 'testnet',
-        appDetails:    { name: 'EcoStamp', icon: '/icon.png' },
-        onFinish: (data: any) => {
-          const txId = data.txId ?? data.txid ?? 'pending';
-          setState(s => ({
-            ...s, txPending: false, txId, hasClaimed: true,
-            claimableAmount: 0,
-            pool: s.pool
-              ? { ...s.pool, totalSbtc: s.pool.totalSbtc - s.claimableAmount }
-              : null,
-          }));
-          setTimeout(refresh, 12_000);
-        },
-        onCancel: () => setState(s => ({ ...s, txPending: false })),
+      await new Promise<void>((resolve, reject) => {
+        openContractCall({
+          contractAddress,
+          contractName,
+          functionName: 'claim-reward',
+          functionArgs: [uintCV(tier)],
+          network: stacksNetwork(),
+          appDetails: { name: 'EcoStamp', icon: '/icon.png' },
+          onFinish: (data: any) => {
+            const txId = data.txId ?? data.txid ?? null;
+            setClaimTxid(txId);
+            if (txId) {
+              addActivity({
+                id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                kind: 'reward',
+                title: 'Reward claim broadcast',
+                detail: `${tierName(tier)} tier`,
+                timestamp: new Date().toISOString(),
+                txId,
+              });
+            }
+            resolve();
+          },
+          onCancel: () => reject(new Error('Transaction cancelled')),
+        });
       });
-    } catch {
-      // Demo fallback — simulates successful claim
-      await new Promise(r => setTimeout(r, 2000));
-      const demoTxid = '0x' + Array.from(
-        crypto.getRandomValues(new Uint8Array(32))
-      ).map(b => b.toString(16).padStart(2, '0')).join('');
-      setState(s => ({
-        ...s,
-        txPending:       false,
-        txId:            demoTxid,
-        hasClaimed:      true,
-        claimableAmount: 0,
-        pool: s.pool
-          ? { ...s.pool, totalSbtc: Math.max(0, s.pool.totalSbtc - s.claimableAmount) }
-          : null,
-      }));
-    }
-  }, [walletAddress, state.tier, state.hasClaimed, state.claimableAmount, refresh]);
 
-  return { state, registerClaimant, claimReward, refresh, satsToDisplay };
+      setClaiming(false);
+      setTimeout(refresh, 12_000);
+    } catch (e: any) {
+      setClaiming(false);
+      setClaimError(e?.message ?? 'Claim failed');
+    }
+  }, [walletAddress, claiming, summary, tier, refresh]);
+
+  return {
+    loading,
+    tier,
+    tierLabel: tierName(tier),
+    stampCount,
+    ecoPoints,
+    summary,
+    claiming,
+    claimTxid,
+    claimError,
+    claimReward,
+    clearClaimState,
+  };
 }

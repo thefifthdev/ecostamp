@@ -5,13 +5,17 @@
   "description": "EcoStamp — Verifiable Travel Impact Protocol on Stacks Bitcoin L2",
   "scripts": {
     "deploy:phase1": "node deploy/deploy-phase1.js",
-    "deploy:phase3": "node deploy/deploy-phase3.js",
+    "deploy:phase3": "node deploy/deploy-phase-3.js",
+    "deploy:phase5": "node deploy/deploy-phase-5.js",
+    "oracle:keygen": "node oracle/src/keygen.js",
+    "oracle:dev": "cd oracle && npm install && node --watch src/index.js",
+    "oracle:start": "cd oracle && node src/index.js",
     "content-server": "cd content-server && npm start",
     "content-server:dev": "cd content-server && npm run dev",
     "frontend:dev": "cd frontend && npm run dev",
     "frontend:build": "cd frontend && npm run build",
-    "dev": "concurrently \"npm run content-server:dev\" \"npm run frontend:dev\"",
-    "install:all": "cd frontend && npm install && cd ../deploy && npm install && cd ../content-server && npm install"
+    "dev": "node scripts/dev.js",
+    "install:all": "cd frontend && npm install && cd ../deploy && npm install && cd ../content-server && npm install && cd ../oracle && npm install"
   },
   "workspaces": [
     "frontend"
@@ -20,10 +24,9 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@stacks/wallet-sdk": "^7.2.0",
-    "@stacks/connect": "^7.10.0",
-    "@stacks/transactions": "^6.16.1",
-    "@stacks/network": "^6.13.0",
-    "dotenv": "^17.3.1"
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "secp256k1": "^5.0.1"
   }
 }

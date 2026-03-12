@@ -4,86 +4,96 @@
  * All functions fall back gracefully when contracts are not yet deployed.
  */
 
+import { cvToHex, cvToJSON, hexToCV, standardPrincipalCV, uintCV } from '@stacks/transactions';
+
 const API = process.env.NEXT_PUBLIC_STACKS_API || 'https://api.testnet.hiro.so';
 
 export const CONTRACTS = {
-  stampRegistry: process.env.NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS ?? '',
-  rewardPool:    process.env.NEXT_PUBLIC_REWARD_POOL_ADDRESS    ?? '',
+  providerRegistry: process.env.NEXT_PUBLIC_PROVIDER_REGISTRY_ADDRESS ?? '',
+  stampRegistry:    process.env.NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS    ?? '',
+  rewardPool:       process.env.NEXT_PUBLIC_REWARD_POOL_ADDRESS       ?? '',
 };
 
 // ── Low-level call ────────────────────────────────────────────────────────────
 
-async function readOnly(
-  contractAddress: string,
-  contractName:    string,
-  functionName:    string,
-  args:            string[] = [],
-  sender?:         string
-): Promise<string | null> {
-  try {
-    const url = `${API}/v2/contracts/call-read/${contractAddress}/${contractName}/${functionName}`;
-    const res = await fetch(url, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ sender: sender ?? contractAddress, arguments: args }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.result ?? null;
-  } catch {
-    return null;
+type CvJson = any;
+
+function decodeReadOnlyResult(result: any): CvJson | null {
+  const raw = String(result ?? '');
+  if (!raw) return null;
+  if (raw.startsWith('0x')) {
+    try {
+      return cvToJSON(hexToCV(raw));
+    } catch {
+      return null;
+    }
   }
+  // Fallback: best-effort for repr strings like "(ok u42)" or "u42"
+  const m = raw.match(/u(\d+)/);
+  if (m) return { type: 'uint', value: m[1] };
+  if (raw.includes('true')) return { type: 'bool', value: true };
+  if (raw.includes('false')) return { type: 'bool', value: false };
+  return null;
 }
 
-// ── Clarity value parsers ─────────────────────────────────────────────────────
-
-/** Extract uint from Clarity result like "(ok u42)" or "u42" */
-export function parseUint(hex: string | null | undefined): number {
-  if (!hex) return 0;
-  const m = String(hex).match(/u(\d+)/);
-  return m ? Number(m[1]) : 0;
+function unwrapResponse(j: CvJson | null): CvJson | null {
+  if (!j) return null;
+  if (j.type === 'response') return j.value?.success ? (j.value?.value ?? null) : null;
+  return j;
 }
 
-export function parseBool(hex: string | null | undefined): boolean {
-  const s = String(hex ?? '');
-  return s.includes('true') || s === '0x03';
+function asUint(j: CvJson | null | undefined): number {
+  if (!j) return 0;
+  if (j.type === 'uint' || j.type === 'int') return Number(j.value);
+  if (j.type === 'optional') return j.value ? asUint(j.value) : 0;
+  if (j.type === 'response') return unwrapResponse(j) ? asUint(unwrapResponse(j)) : 0;
+  return 0;
 }
 
-/** Extract named fields from a Clarity tuple result string */
-export function parseTuple(hex: string | null | undefined): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (!hex) return result;
-  for (const m of String(hex).matchAll(/([\w-]+):\s*(u\d+|true|false|none)/g)) {
-    result[m[1]] = m[2];
-  }
-  return result;
+function asBool(j: CvJson | null | undefined): boolean {
+  if (!j) return false;
+  if (j.type === 'bool') return Boolean(j.value);
+  if (j.type === 'optional') return j.value ? asBool(j.value) : false;
+  if (j.type === 'response') return unwrapResponse(j) ? asBool(unwrapResponse(j)) : false;
+  return false;
 }
 
-// ── Clarity value encoders ────────────────────────────────────────────────────
-
-/** Encode uint as Clarity CV hex: 0x01 + 16 bytes big-endian */
-export function encodeUint(n: number): string {
-  return `0x01${BigInt(n).toString(16).padStart(32, '0')}`;
+function asTuple(j: CvJson | null | undefined): Record<string, CvJson> {
+  if (!j) return {};
+  const unwrapped = unwrapResponse(j);
+  if (unwrapped?.type !== 'tuple') return {};
+  return unwrapped.value ?? {};
 }
-
-/**
- * Encode a Stacks principal as a Clarity string-ascii CV for the read-only API.
- * The Hiro endpoint accepts arguments as hex Clarity values.
- * We encode the address as a string-ascii CV (type 0x0d) which the API decodes
- * and coerces to a principal for read-only functions.
- */
-export function encodePrincipal(address: string): string {
-  const bytes = new TextEncoder().encode(address);
-  const lenHex = bytes.length.toString(16).padStart(8, '0');
-  const bodyHex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-  return `0x0d${lenHex}${bodyHex}`;
-}
-
-// ── Domain helpers ────────────────────────────────────────────────────────────
 
 function splitContract(addr: string): [string, string] {
   const dot = addr.lastIndexOf('.');
   return [addr.slice(0, dot), addr.slice(dot + 1)];
+}
+
+async function callRead(
+  contractId:   string,
+  functionName: string,
+  args:         any[] = [],
+  sender?:      string
+): Promise<CvJson | null> {
+  try {
+    if (!contractId || !contractId.includes('.')) return null;
+    const [contractAddress, contractName] = splitContract(contractId);
+    const url = `${API}/v2/contracts/call-read/${contractAddress}/${contractName}/${functionName}`;
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        sender: sender ?? contractAddress,
+        arguments: args.map(a => cvToHex(a)),
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return decodeReadOnlyResult(data.result);
+  } catch {
+    return null;
+  }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -91,25 +101,29 @@ function splitContract(addr: string): [string, string] {
 /** Tier 0=bronze 1=silver 2=gold from stamp-registry */
 export async function fetchTier(wallet: string): Promise<number> {
   if (!CONTRACTS.stampRegistry) return 0;
-  const [addr, name] = splitContract(CONTRACTS.stampRegistry);
-  const r = await readOnly(addr, name, 'get-tier', [encodePrincipal(wallet)], wallet);
-  return parseUint(r);
+  const j = await callRead(CONTRACTS.stampRegistry, 'get-tier', [standardPrincipalCV(wallet)], wallet);
+  return asUint(unwrapResponse(j));
 }
 
 /** Total stamps minted for a wallet */
 export async function fetchStampCount(wallet: string): Promise<number> {
   if (!CONTRACTS.stampRegistry) return 0;
-  const [addr, name] = splitContract(CONTRACTS.stampRegistry);
-  const r = await readOnly(addr, name, 'get-total-stamps', [encodePrincipal(wallet)], wallet);
-  return parseUint(r);
+  const j = await callRead(CONTRACTS.stampRegistry, 'get-total-stamps', [standardPrincipalCV(wallet)], wallet);
+  return asUint(unwrapResponse(j));
+}
+
+/** Total eco points for a wallet */
+export async function fetchEcoPoints(wallet: string): Promise<number> {
+  if (!CONTRACTS.stampRegistry) return 0;
+  const j = await callRead(CONTRACTS.stampRegistry, 'get-eco-points', [standardPrincipalCV(wallet)], wallet);
+  return asUint(unwrapResponse(j));
 }
 
 /** Pool balance in satoshis */
 export async function fetchPoolBalance(): Promise<number> {
   if (!CONTRACTS.rewardPool) return 42_000_000;
-  const [addr, name] = splitContract(CONTRACTS.rewardPool);
-  const r = await readOnly(addr, name, 'get-pool-balance', []);
-  return parseUint(r) || 42_000_000;
+  const j = await callRead(CONTRACTS.rewardPool, 'get-pool-balance', []);
+  return asUint(unwrapResponse(j)) || 42_000_000;
 }
 
 export interface RewardSummary {
@@ -131,23 +145,23 @@ export async function fetchRewardSummary(wallet: string, tier: number): Promise<
     cooldownBlocks: 0, canClaim: false,
   };
   if (!CONTRACTS.rewardPool) return fallback;
-  const [addr, name] = splitContract(CONTRACTS.rewardPool);
-  const r = await readOnly(
-    addr, name, 'get-reward-summary',
-    [encodePrincipal(wallet), encodeUint(tier)],
+  const j = await callRead(
+    CONTRACTS.rewardPool,
+    'get-reward-summary',
+    [standardPrincipalCV(wallet), uintCV(tier)],
     wallet
   );
-  if (!r) return fallback;
-  const t = parseTuple(r);
+  if (!j) return fallback;
+  const t = asTuple(j);
   return {
-    claimable:        parseUint(t['claimable']),
-    poolBalance:      parseUint(t['pool-balance'])       || 42_000_000,
-    totalDeposited:   parseUint(t['total-deposited'])    || 42_000_000,
-    totalClaimed:     parseUint(t['total-claimed']),
-    userTotalClaimed: parseUint(t['user-total-claimed']),
-    claimCount:       parseUint(t['claim-count']),
-    cooldownBlocks:   parseUint(t['cooldown-blocks']),
-    canClaim:         parseBool(t['can-claim']),
+    claimable:        asUint(t['claimable']),
+    poolBalance:      asUint(t['pool-balance'])       || 42_000_000,
+    totalDeposited:   asUint(t['total-deposited'])    || 42_000_000,
+    totalClaimed:     asUint(t['total-claimed']),
+    userTotalClaimed: asUint(t['user-total-claimed']),
+    claimCount:       asUint(t['claim-count']),
+    cooldownBlocks:   asUint(t['cooldown-blocks']),
+    canClaim:         asBool(t['can-claim']),
   };
 }
 
@@ -171,4 +185,95 @@ export function satsToDisplay(sats: number): string {
   if (sats === 0) return '0';
   if (sats < 1000) return `${sats} sats`;
   return `${satsToBtc(sats)} sBTC`;
+}
+
+// ── Provider registry (Phase 4/5) ────────────────────────────────────────────
+
+export interface ProviderRecord {
+  id:          number;
+  name:        string;
+  category:    string;
+  ecoScore:    number;
+  status:      'pending' | 'approved' | 'revoked';
+  owner:       string;
+  stampsIssued: number;
+  signingKeyHash?: string | null;
+}
+
+function asString(j: CvJson | null | undefined): string {
+  if (!j) return '';
+  if (j.type === 'string-ascii' || j.type === 'string-utf8') return String(j.value ?? '');
+  if (j.type === 'principal') return String(j.value ?? '');
+  if (j.type === 'optional') return j.value ? asString(j.value) : '';
+  if (j.type === 'response') return unwrapResponse(j) ? asString(unwrapResponse(j)) : '';
+  return '';
+}
+
+function asHex(j: CvJson | null | undefined): string {
+  if (!j) return '';
+  if (j.type === 'buffer') return String(j.value ?? '');
+  if (j.type === 'optional') return j.value ? asHex(j.value) : '';
+  if (j.type === 'response') return unwrapResponse(j) ? asHex(unwrapResponse(j)) : '';
+  return '';
+}
+
+function statusFromUint(n: number): ProviderRecord['status'] {
+  if (n === 1) return 'approved';
+  if (n === 2) return 'revoked';
+  return 'pending';
+}
+
+export async function fetchNextProviderId(): Promise<number> {
+  if (!CONTRACTS.providerRegistry) return 1;
+  const j = await callRead(CONTRACTS.providerRegistry, 'get-next-id', []);
+  return asUint(unwrapResponse(j)) || 1;
+}
+
+export async function fetchProvider(providerId: number): Promise<ProviderRecord | null> {
+  if (!CONTRACTS.providerRegistry) return null;
+  const j = await callRead(CONTRACTS.providerRegistry, 'get-provider', [uintCV(providerId)]);
+  const unwrapped = unwrapResponse(j);
+  if (!unwrapped) return null;
+
+  // get-provider returns (optional (tuple ...))
+  if (unwrapped.type === 'optional' && !unwrapped.value) return null;
+  const tuple = unwrapped.type === 'optional' ? asTuple(unwrapped.value) : asTuple(unwrapped);
+  if (!Object.keys(tuple).length) return null;
+
+  return {
+    id:          providerId,
+    name:        asString(tuple['name']),
+    category:    asString(tuple['category']),
+    ecoScore:    asUint(tuple['eco-score']),
+    status:      statusFromUint(asUint(tuple['status'])),
+    owner:       asString(tuple['owner']),
+    stampsIssued: asUint(tuple['stamps-issued']),
+    signingKeyHash: asHex(tuple['signing-key-hash']) || null,
+  };
+}
+
+export async function fetchProviderIdByOwner(owner: string): Promise<number | null> {
+  if (!CONTRACTS.providerRegistry) return null;
+  const j = await callRead(CONTRACTS.providerRegistry, 'get-provider-id-by-owner', [standardPrincipalCV(owner)]);
+  const unwrapped = unwrapResponse(j);
+  if (!unwrapped || unwrapped.type !== 'optional' || !unwrapped.value) return null;
+  const t = asTuple(unwrapped.value);
+  const id = asUint(t['provider-id']);
+  return id > 0 ? id : null;
+}
+
+export async function fetchProviderForOwner(owner: string): Promise<ProviderRecord | null> {
+  const id = await fetchProviderIdByOwner(owner);
+  if (!id) return null;
+  return fetchProvider(id);
+}
+
+export async function fetchProviders(limit = 50): Promise<ProviderRecord[]> {
+  const next = await fetchNextProviderId();
+  const maxId = Math.min(next - 1, limit);
+  if (maxId <= 0) return [];
+
+  const ids = Array.from({ length: maxId }, (_, i) => i + 1);
+  const records = await Promise.all(ids.map(id => fetchProvider(id)));
+  return records.filter(Boolean) as ProviderRecord[];
 }

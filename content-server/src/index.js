@@ -39,6 +39,11 @@ if (!WALLET && !DEMO_MODE) {
   process.exit(1);
 }
 
+const USDC_ASSET =
+  NETWORK === 'base'
+    ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' // USDC on Base
+    : '0x036CbD53842c5426634e7929541eC2318f3dCF7e'; // USDC on Base Sepolia
+
 // ── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({
@@ -102,7 +107,7 @@ function demoPaymentGate(priceMap) {
         network:            config.network,
         maxAmountRequired:  String(Math.round(parseFloat(config.price.replace('$', '')) * 1_000_000)),
         payTo:              WALLET || '0x0000000000000000000000000000000000000000',
-        asset:              '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // USDC Base Sepolia
+        asset:              USDC_ASSET,
         resource:           req.path,
       }],
       error:       'X-PAYMENT header is required',
@@ -127,6 +132,11 @@ const PRICE_MAP = {
     price:       '$0.003',
     network:     NETWORK,
     description: 'Full verified eco hotel directory with sustainability certifications',
+  },
+  'GET /provider-listing-fee': {
+    price:       '$0.10',
+    network:     NETWORK,
+    description: 'EcoStamp provider listing fee (anti-spam + verifier cost recovery)',
   },
 };
 
@@ -200,7 +210,23 @@ app.get('/hotels/verified-list', (req, res) => {
     ok: true,
     count: hotels.length,
     hotels,
-    certification: 'EcoStamp Provider Registry v1 — verified on Stacks testnet',
+    certification: `EcoStamp Provider Registry v1 — verified on Stacks ${process.env.STACKS_NETWORK || 'testnet'}`,
+    paidAt: new Date().toISOString(),
+  });
+});
+
+/**
+ * GET /provider-listing-fee
+ * Used by the ProviderApply flow to charge a one-time listing fee via x402.
+ * Payment was already verified by paymentMiddleware above.
+ */
+app.get('/provider-listing-fee', (_req, res) => {
+  res.json({
+    ok: true,
+    purpose: 'provider-listing-fee',
+    fee: '$0.10',
+    currency: 'USDC',
+    network: NETWORK,
     paidAt: new Date().toISOString(),
   });
 });
@@ -212,11 +238,12 @@ app.get('/health', (req, res) => {
     status: 'ok',
     phase: 2,
     network: NETWORK,
-    wallet: `${WALLET.slice(0, 6)}...${WALLET.slice(-4)}`,
+    wallet: WALLET ? `${WALLET.slice(0, 6)}...${WALLET.slice(-4)}` : '(not set)',
     endpoints: [
       { path: '/guides/:slug',          price: '$0.001', stampBonus: 'extended edition' },
       { path: '/routes/carbon-optimal', price: '$0.002', stampBonus: 'extended routes'  },
       { path: '/hotels/verified-list',  price: '$0.003', stampBonus: 'full cert data'   },
+      { path: '/provider-listing-fee',  price: '$0.10',  stampBonus: 'n/a'              },
     ],
     availableGuides: Object.keys(GUIDES),
   });

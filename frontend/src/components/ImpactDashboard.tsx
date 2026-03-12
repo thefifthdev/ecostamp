@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { CategoryIcon, IconWallet, IconAward, IconGlobe, IconLeaf, IconBitcoin, IconVerified, IconZap, IconCheck } from './Icons';
 import { useRewardPool } from '@/hooks/useRewardPool';
 import { TIER_CONFIG, satsToBtc, satsToDisplay } from '@/lib/stacks';
+import { hiroTxUrl } from '@/lib/explorer';
 
 const ACTIVITY = [
   { action: 'Stamp minted', provider: 'The Green Lodge',  points: '+3', date: '2026-03-09', category: 'hotel'     },
@@ -106,7 +107,9 @@ export default function ImpactDashboard({ walletAddress }: { walletAddress: stri
               <div className="text-xs uppercase tracking-widest text-sage-500 mb-2">Current Tier</div>
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-2 border animate-float"
                    style={{ borderColor: `${currentTier.color}50`, background: `${currentTier.color}18` }}>
-                <IconAward size={32} style={{ color: currentTier.color }} />
+                <div style={{ color: currentTier.color }}>
+                  <IconAward size={32} className="text-current" />
+                </div>
               </div>
               <div className="font-display text-xl" style={{ color: currentTier.color }}>
                 {tierLabel}
@@ -179,7 +182,9 @@ export default function ImpactDashboard({ walletAddress }: { walletAddress: stri
                          ${isActive ? 'border border-glow-300/30 bg-forest-700/30' : 'opacity-60'}`}>
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border"
                          style={{ borderColor: `${t.color}40`, background: `${t.color}18` }}>
-                      <IconAward size={18} style={{ color: t.color }} />
+                      <div style={{ color: t.color }}>
+                        <IconAward size={18} className="text-current" />
+                      </div>
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
@@ -352,7 +357,7 @@ function RewardClaimCard({
             </div>
             <div className="font-mono text-xs text-sage-500 break-all">{claimTxid}</div>
             <div className="flex gap-3">
-              <a href={`https://explorer.hiro.so/txid/${claimTxid}?chain=testnet`}
+              <a href={hiroTxUrl(claimTxid)}
                  target="_blank" rel="noopener noreferrer"
                  className="text-xs text-glow-400 hover:text-glow-300 transition-colors">
                 View on Explorer →

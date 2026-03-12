@@ -5,7 +5,7 @@
  *
  * Self-serve provider application flow:
  *   1. Fill application form (name, category, eco-score, evidence)
- *   2. Pay x402 listing fee ($0.10 USDC on Base Sepolia) to submit
+ *   2. Pay x402 listing fee ($0.10 USDC on Base Sepolia/Base) to submit
  *   3. Call apply-provider on provider-registry.clar
  *   4. Receive confirmation + pending status
  *
@@ -14,11 +14,15 @@
  * using the same randomHex pattern from useX402.
  */
 
-import { useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   IconLeaf, IconUpload, IconCheckCircle, IconX, IconZap,
   IconShield, IconStar, IconGlobe, CategoryIcon,
 } from './Icons';
+import { hiroTxUrl, stacksChain } from '@/lib/explorer';
+import { stacksNetwork } from '@/lib/stacks-network';
+import { fetchProviderForOwner, type ProviderRecord } from '@/lib/stacks';
+import { addActivity } from '@/lib/activity';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,9 +51,9 @@ const CATEGORIES: { id: Category; label: string }[] = [
   { id: 'restaurant', label: 'Restaurant / Food'     },
 ];
 
-// Listing fee in USDC (Phase 4: Base Sepolia test USDC)
+// Listing fee in USDC (Phase 4: Base Sepolia test USDC; Phase 5: Base mainnet USDC)
 const LISTING_FEE_USDC = '0.10';
-const LISTING_FEE_DESC = 'EcoStamp provider listing fee — Base Sepolia USDC';
+const LISTING_FEE_DESC = 'EcoStamp provider listing fee — USDC via x402';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -63,53 +67,152 @@ function demoEvmAddress(): string {
   return '0x' + randomHex(20).slice(2);
 }
 
-async function payListingFee(): Promise<{ txid: string; paymentHeader: string }> {
-  // In production this would be a real viem signTypedData EIP-712 call.
-  // Phase 4 demo: generate Zod-valid hex fields, call /api/x402 proxy.
-  const signature = randomHex(65);
-  const from      = demoEvmAddress();
-  const nonce     = randomHex(32);
-  const now       = Math.floor(Date.now() / 1000);
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
-  const paymentPayload = {
-    x402Version: 1,
-    scheme: 'exact',
-    network: process.env.NEXT_PUBLIC_X402_NETWORK || 'base-sepolia',
-    payload: {
-      signature,
-      authorization: {
-        from,
-        to:          process.env.NEXT_PUBLIC_X402_WALLET || from,
-        value:       '100000',        // $0.10 USDC (6 decimals)
-        validAfter:  '0x' + (now - 60).toString(16).padStart(64, '0'),
-        validBefore: '0x' + (now + 3600).toString(16).padStart(64, '0'),
-        nonce,
-      },
+const X402_NETWORK = (process.env.NEXT_PUBLIC_X402_NETWORK || 'base-sepolia') as 'base' | 'base-sepolia';
+const X402_NETWORK_LABEL = X402_NETWORK === 'base' ? 'Base' : 'Base Sepolia';
+
+const USDC_CONFIG = {
+  'base': {
+    chainId: 8453,
+    usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as `0x${string}`,
+  },
+  'base-sepolia': {
+    chainId: 84532,
+    usdcContract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as `0x${string}`,
+  },
+} as const;
+
+async function signUSDCPermit(
+  payTo: string,
+  value: string,
+  network: keyof typeof USDC_CONFIG,
+): Promise<{ from: `0x${string}`; signature: `0x${string}`; nonce: `0x${string}`; validAfter: string; validBefore: string }> {
+  const cfg = USDC_CONFIG[network] ?? USDC_CONFIG['base-sepolia'];
+  const nonce  = randomHex(32) as `0x${string}`;
+  const now    = Math.floor(Date.now() / 1000);
+  const validAfter  = '0x' + (now - 60).toString(16).padStart(64, '0');
+  const validBefore = '0x' + (now + 300).toString(16).padStart(64, '0');
+
+  const { createWalletClient, custom } = await import('viem');
+  const chain = network === 'base'
+    ? await import('viem/chains').then(m => m.base)
+    : await import('viem/chains').then(m => m.baseSepolia);
+
+  if (!window.ethereum) throw new Error('No EVM wallet detected. Install MetaMask or Coinbase Wallet.');
+
+  const client = createWalletClient({ chain, transport: custom(window.ethereum) });
+  const accounts = await client.requestAddresses();
+  if (!accounts.length) throw new Error('No EVM accounts found. Connect your EVM wallet.');
+  const from = accounts[0] as `0x${string}`;
+
+  const signature = await client.signTypedData({
+    account: from,
+    domain: {
+      name: 'USD Coin',
+      version: '2',
+      chainId: BigInt(cfg.chainId),
+      verifyingContract: cfg.usdcContract,
     },
-  };
+    types: {
+      TransferWithAuthorization: [
+        { name: 'from',        type: 'address' },
+        { name: 'to',          type: 'address'  },
+        { name: 'value',       type: 'uint256'  },
+        { name: 'validAfter',  type: 'uint256'  },
+        { name: 'validBefore', type: 'uint256'  },
+        { name: 'nonce',       type: 'bytes32'  },
+      ],
+    },
+    primaryType: 'TransferWithAuthorization',
+    message: {
+      from,
+      to: payTo as `0x${string}`,
+      value: BigInt(value),
+      validAfter: BigInt(validAfter),
+      validBefore: BigInt(validBefore),
+      nonce,
+    },
+  });
+
+  return { from, signature, nonce, validAfter, validBefore };
+}
+
+async function payListingFee(): Promise<{ txid: string; paymentHeader: string }> {
+  // 1) Trigger 402 to get payment requirements
+  const init = await fetch('/api/x402', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: '/provider-listing-fee' }),
+  });
+
+  let accepts: any = null;
+  if (init.status === 402) {
+    const j = await init.json().catch(() => ({}));
+    accepts = j?.payment?.accepts?.[0] ?? j?.accepts?.[0] ?? null;
+  } else if (!init.ok) {
+    const err = await init.json().catch(() => ({}));
+    throw new Error(err.error || `Listing fee endpoint failed (${init.status})`);
+  } else {
+    // Already paid / unprotected (unlikely)
+    const ok = await init.json().catch(() => ({}));
+    return { txid: ok.paymentReceipt || randomHex(32), paymentHeader: '' };
+  }
+
+  const payTo = String(accepts?.payTo ?? process.env.NEXT_PUBLIC_X402_WALLET ?? '').slice(0, 42);
+  const value = String(accepts?.maxAmountRequired ?? '100000'); // $0.10 USDC
+  const network = (accepts?.network ?? X402_NETWORK) as keyof typeof USDC_CONFIG;
+
+  let paymentPayload: any;
+  if (DEMO_MODE) {
+    const from = demoEvmAddress();
+    paymentPayload = {
+      x402Version: 1,
+      scheme: accepts?.scheme ?? 'exact',
+      network,
+      payload: {
+        signature: randomHex(65),
+        authorization: {
+          from,
+          to: payTo || (process.env.NEXT_PUBLIC_X402_WALLET ?? from),
+          value,
+          validAfter: '0',
+          validBefore: String(Math.floor(Date.now() / 1000) + 300),
+          nonce: randomHex(32),
+        },
+      },
+    };
+  } else {
+    const { from, signature, nonce, validAfter, validBefore } = await signUSDCPermit(payTo, value, network);
+    paymentPayload = {
+      x402Version: 1,
+      scheme: accepts?.scheme ?? 'exact',
+      network,
+      payload: {
+        signature,
+        authorization: { from, to: payTo, value, validAfter, validBefore, nonce },
+      },
+    };
+  }
 
   const paymentHeader = btoa(JSON.stringify(paymentPayload));
 
-  // Hit the x402 listing fee endpoint
-  const res = await fetch('/api/x402', {
+  // 2) Retry with X-PAYMENT
+  const payRes = await fetch('/api/x402', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url:           '/provider-listing-fee',
-      paymentHeader,
-    }),
+    body: JSON.stringify({ url: '/provider-listing-fee', paymentHeader }),
   });
+  const payData = await payRes.json().catch(() => ({}));
+  if (!payRes.ok) throw new Error(payData.error || `Payment failed (${payRes.status})`);
 
-  // In demo mode the content server returns 200 immediately; in prod
-  // the facilitator verifies the EIP-712 signature on-chain first.
-  const txid = randomHex(32); // demo: real txid comes from CDP receipt
-  return { txid, paymentHeader };
+  return { txid: payData.paymentReceipt || randomHex(32), paymentHeader };
 }
 
 async function submitToChain(form: ApplicationForm, _paymentTxid: string): Promise<string> {
   try {
     const { openContractCall } = await import('@stacks/connect');
-    const { stringUtf8CV, uintCV } = await import('@stacks/transactions');
+    const { stringAsciiCV, stringUtf8CV, uintCV } = await import('@stacks/transactions');
 
     const contractAddress = process.env.NEXT_PUBLIC_PROVIDER_REGISTRY_ADDRESS || '';
     if (!contractAddress) throw new Error('no contract');
@@ -122,10 +225,10 @@ async function submitToChain(form: ApplicationForm, _paymentTxid: string): Promi
         functionName:    'apply-provider',
         functionArgs: [
           stringUtf8CV(form.name),
-          stringUtf8CV(form.category),
+          stringAsciiCV(form.category),
           uintCV(form.ecoScore),
         ],
-        network:    process.env.NEXT_PUBLIC_STACKS_NETWORK === 'mainnet' ? 'mainnet' : 'testnet',
+        network:    stacksNetwork(),
         appDetails: { name: 'EcoStamp', icon: '/icon.png' },
         onFinish:   (data: any) => resolve(data.txId ?? data.txid ?? 'pending'),
         onCancel:   () => reject(new Error('cancelled')),
@@ -185,7 +288,16 @@ function EcoScoreSlider({ value, onChange }: { value: number; onChange: (v: numb
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ProviderApply({ walletAddress }: { walletAddress: string | null }) {
+export default function ProviderApply({
+  walletAddress,
+  evmAddress: _evmAddress,
+}: {
+  walletAddress: string | null;
+  evmAddress?: string | null;
+}) {
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalProvider, setPortalProvider] = useState<ProviderRecord | null>(null);
+
   const [step, setStep]   = useState<Step>('form');
   const [error, setError] = useState('');
   const [txid, setTxid]   = useState('');
@@ -215,14 +327,43 @@ export default function ProviderApply({ walletAddress }: { walletAddress: string
 
   const stepNum = step === 'form' ? 1 : step === 'review' ? 2 : step === 'paying' ? 3 : step === 'submitting' ? 3 : 4;
 
+  // ── Provider portal status (Phase 4/5) ────────────────────────────────────
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!walletAddress) return;
+      setPortalLoading(true);
+      const p = await fetchProviderForOwner(walletAddress).catch(() => null);
+      if (!mounted) return;
+      setPortalProvider(p);
+      setPortalLoading(false);
+    })();
+    return () => { mounted = false; };
+  }, [walletAddress]);
+
   // ── Submit flow ────────────────────────────────────────────────────────────
 
   const handleSubmit = useCallback(async () => {
+    if (portalProvider) {
+      setError('This wallet already has a provider application on-chain.');
+      setStep('error');
+      return;
+    }
     setStep('paying');
     setError('');
     try {
       const { txid: fTxid } = await payListingFee();
       setFeeTxid(fTxid);
+      addActivity({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        kind: 'x402',
+        title: 'Provider listing fee',
+        detail: `/provider-listing-fee · $${LISTING_FEE_USDC} USDC`,
+        timestamp: new Date().toISOString(),
+        txId: fTxid,
+        network: X402_NETWORK,
+      });
 
       setStep('submitting');
       const chainTxid = await submitToChain(form, fTxid);
@@ -233,7 +374,7 @@ export default function ProviderApply({ walletAddress }: { walletAddress: string
       setError(e.message ?? 'Unknown error');
       setStep('error');
     }
-  }, [form]);
+  }, [form, portalProvider]);
 
   // ── Wallet gate ────────────────────────────────────────────────────────────
 
@@ -283,7 +424,7 @@ export default function ProviderApply({ walletAddress }: { walletAddress: string
             <div className="flex justify-between gap-4">
               <span className="text-sage-500 shrink-0">Chain tx</span>
               <a
-                href={`https://explorer.hiro.so/txid/${txid}?chain=testnet`}
+                href={hiroTxUrl(txid)}
                 target="_blank" rel="noopener noreferrer"
                 className="text-glow-300 font-mono text-xs truncate underline hover:text-glow-400"
               >
@@ -341,8 +482,8 @@ export default function ProviderApply({ walletAddress }: { walletAddress: string
             </h3>
             <p className="text-sage-400 mt-2 text-sm">
               {step === 'paying'
-                ? `Paying ${LISTING_FEE_USDC} USDC via x402 on Base Sepolia`
-                : 'Broadcasting apply-provider to Stacks testnet'}
+                ? `Paying ${LISTING_FEE_USDC} USDC via x402 on ${X402_NETWORK_LABEL}`
+                : `Broadcasting apply-provider to Stacks ${stacksChain()}`}
             </p>
           </div>
         </div>
@@ -355,6 +496,61 @@ export default function ProviderApply({ walletAddress }: { walletAddress: string
   return (
     <section className="min-h-[calc(100vh-64px)] px-4 sm:px-6 lg:px-8 py-12 page-enter">
       <div className="max-w-2xl mx-auto space-y-8">
+
+        {(portalLoading || portalProvider) && (
+          <div className="glass rounded-3xl p-5 border border-glow-300/10">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs uppercase tracking-widest text-sage-500">Provider Portal</div>
+                <div className="font-display text-lg text-cream-100 mt-1">
+                  {portalLoading ? 'Checking application status…' : portalProvider ? portalProvider.name : 'No application found'}
+                </div>
+                {portalProvider && (
+                  <div className="text-xs text-sage-500 mt-1 capitalize">
+                    {portalProvider.category} · score {portalProvider.ecoScore} · {portalProvider.status}
+                  </div>
+                )}
+              </div>
+              {portalProvider?.status === 'approved' && (
+                <div className="text-[10px] glass-light rounded-full px-2 py-1 text-glow-400 border border-glow-300/20">
+                  verified
+                </div>
+              )}
+              {portalProvider?.status === 'pending' && (
+                <div className="text-[10px] glass-light rounded-full px-2 py-1 text-amber-300 border border-amber-400/20">
+                  pending
+                </div>
+              )}
+              {portalProvider?.status === 'revoked' && (
+                <div className="text-[10px] glass-light rounded-full px-2 py-1 text-red-300 border border-red-400/20">
+                  revoked
+                </div>
+              )}
+            </div>
+
+            {portalProvider && (
+              <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                <div className="glass-light rounded-2xl p-4">
+                  <div className="text-xs text-sage-500">Provider ID</div>
+                  <div className="text-sm text-cream-200 font-mono mt-1">#{portalProvider.id}</div>
+                </div>
+                <div className="glass-light rounded-2xl p-4">
+                  <div className="text-xs text-sage-500">Signing key hash</div>
+                  <div className="text-xs text-sage-300 font-mono mt-1 break-all">
+                    {portalProvider.signingKeyHash || 'Not issued yet'}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {portalProvider?.status === 'approved' && (
+              <div className="mt-4 text-xs text-sage-500 leading-relaxed">
+                Integration: configure your booking system to call the EcoStamp oracle and return a booking reference.
+                The verifier can rotate your signing key if compromised.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Header */}
         <div>
@@ -411,7 +607,7 @@ export default function ProviderApply({ walletAddress }: { walletAddress: string
               <div>
                 <div className="text-xs text-sage-500 mb-1">Listing fee</div>
                 <div className="font-display text-2xl text-glow-400">{LISTING_FEE_USDC} <span className="text-sm text-sage-400">USDC</span></div>
-                <div className="text-xs text-sage-500 mt-1">Base Sepolia · via x402 micropayment</div>
+                <div className="text-xs text-sage-500 mt-1">{X402_NETWORK_LABEL} · via x402 micropayment</div>
               </div>
               <div className="text-right text-xs text-sage-500 max-w-[200px]">
                 Paid on submission. Refunded if application is rejected within 7 days.
@@ -540,7 +736,7 @@ export default function ProviderApply({ walletAddress }: { walletAddress: string
               <IconZap size={16} className="text-glow-400 mt-0.5 shrink-0" />
               <p className="text-xs text-sage-400 leading-relaxed">
                 A <span className="text-glow-400 font-medium">{LISTING_FEE_USDC} USDC</span> listing fee is charged
-                on submission via x402 HTTP micropayment on Base Sepolia. This covers verifier costs and prevents
+                on submission via x402 HTTP micropayment on {X402_NETWORK_LABEL}. This covers verifier costs and prevents
                 spam applications. Refunded within 7 days if rejected.
               </p>
             </div>

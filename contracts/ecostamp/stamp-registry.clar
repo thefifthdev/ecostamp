@@ -30,6 +30,7 @@
 ;; --- Data vars ----------------------------------------------------------------
 (define-data-var provider-registry-contract principal CONTRACT_OWNER)
 (define-data-var total-stamps-minted uint u0)
+(define-data-var sig-verification-enabled bool false)
 
 ;; --- Data maps ----------------------------------------------------------------
 
@@ -39,10 +40,10 @@
   { amount: uint }
 )
 
-;; Per-user total stamp count (all providers)
-(define-map user-stamp-totals
+;; Per-user totals (stamp count + eco points)
+(define-map user-totals
   { user: principal }
-  { total: uint }
+  { stamps: uint, points: uint }
 )
 
 ;; Replay protection: booking-hash already used by this user+provider
@@ -74,7 +75,7 @@
 
 (define-read-only (get-total-stamps (user principal))
   (default-to u0
-    (get total (map-get? user-stamp-totals { user: user }))
+    (get stamps (map-get? user-totals { user: user }))
   )
 )
 
@@ -87,10 +88,10 @@
 )
 
 ;; Calculate weighted eco points for a user across all provider types
-;; Simple summation: total stamps * base weight per provider category
-;; In production this would pull category from provider-registry
 (define-read-only (get-eco-points (user principal))
-  (get total (default-to { total: u0 } (map-get? user-stamp-totals { user: user })))
+  (default-to u0
+    (get points (map-get? user-totals { user: user }))
+  )
 )
 
 ;; Tier: 0=bronze, 1=silver, 2=gold
@@ -108,6 +109,10 @@
 
 (define-read-only (get-total-minted)
   (var-get total-stamps-minted)
+)
+
+(define-read-only (get-sig-verification-enabled)
+  (var-get sig-verification-enabled)
 )
 
 ;; --- Public functions ---------------------------------------------------------
@@ -129,12 +134,28 @@
       ERR_PROOF_USED
     )
 
-    ;; Verify secp256k1 signature: message = sha256(booking-hash ++ provider-id ++ caller)
-    ;; The oracle signs: keccak(booking_ref || provider_id || user_address)
-    ;; For hackathon/testnet we accept any valid sig format; full sig check below.
-    ;; In production: use (secp256k1-verify booking-hash booking-proof oracle-pubkey)
-    ;; We validate indirectly: the oracle server checks the booking before signing.
-    (asserts! (>= (len booking-proof) u64) ERR_INVALID_PROOF)
+    ;; Provider must be approved in provider-registry
+    (asserts!
+      (contract-call? (var-get provider-registry-contract) is-approved provider-id)
+      ERR_PROVIDER_NOT_ACTIVE
+    )
+
+    ;; Optional Phase 5: enable real secp256k1 proof checking.
+    ;; msgHash = sha256(booking-hash || to-consensus-buff(provider-id))
+    (if (var-get sig-verification-enabled)
+      (let
+        (
+          (pid-buf (unwrap! (to-consensus-buff? provider-id) ERR_INVALID_PROOF))
+          (msg-hash (sha256 (concat booking-hash pid-buf)))
+          (pubkey   (unwrap! (secp256k1-recover? msg-hash booking-proof) ERR_INVALID_PROOF))
+          (key-hash-opt (contract-call? (var-get provider-registry-contract) get-signing-key-hash provider-id))
+        )
+        (let ((key-hash (unwrap! key-hash-opt ERR_INVALID_PROOF)))
+          (asserts! (is-eq (sha256 pubkey) key-hash) ERR_INVALID_PROOF)
+        )
+      )
+      true
+    )
 
     ;; Mark proof used
     (map-set proof-used
@@ -149,9 +170,14 @@
     )
 
     ;; Update user totals
-    (map-set user-stamp-totals
-      { user: caller }
-      { total: (+ (get-total-stamps caller) u1) }
+    (let
+      (
+        (prev (default-to { stamps: u0, points: u0 } (map-get? user-totals { user: caller })))
+      )
+      (map-set user-totals
+        { user: caller }
+        { stamps: (+ (get stamps prev) u1), points: (+ (get points prev) eco-points) }
+      )
     )
 
     ;; Record stamp
@@ -168,6 +194,9 @@
 
     (var-set next-stamp-id (+ stamp-id u1))
     (var-set total-stamps-minted (+ (var-get total-stamps-minted) u1))
+
+    ;; Increment provider stamp counter
+    (try! (contract-call? (var-get provider-registry-contract) increment-stamps-issued provider-id))
 
     (print {
       event:       "stamp-minted",
@@ -207,6 +236,24 @@
   (begin
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
     (var-set provider-registry-contract new-registry)
+    (ok true)
+  )
+)
+
+;; Admin: enable signature verification
+(define-public (enable-sig-verification)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set sig-verification-enabled true)
+    (ok true)
+  )
+)
+
+;; Admin: disable signature verification (testnet safety / rollback)
+(define-public (disable-sig-verification)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set sig-verification-enabled false)
     (ok true)
   )
 )
