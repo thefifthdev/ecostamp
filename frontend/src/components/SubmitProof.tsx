@@ -125,7 +125,12 @@ export default function SubmitProof({ walletAddress }: { walletAddress: string |
       setBookingHash(bh);
 
       const contractId = (process.env.NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS || '').trim();
-      if (!contractId.includes('.')) throw new Error('Stamp registry not configured (NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS)');
+      if (!contractId.includes('.')) {
+        throw new Error(
+          'Stamp registry not configured. Deploy Phase 1 and ensure NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS is set ' +
+          '(written to frontend/.env.contracts). Restart the frontend dev server after deploy.'
+        );
+      }
       const [contractAddress, contractName] = contractId.split('.');
 
       setStep('minting');

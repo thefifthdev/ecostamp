@@ -80,6 +80,8 @@ This writes contract IDs to `frontend/.env.contracts` and wires:
 - `stamp-registry.set-provider-registry(provider-registry)`
 - `provider-registry.set-stamp-registry(stamp-registry)`
 
+Restart `npm run frontend:dev` (or `npm run dev`) after deploying so the new `NEXT_PUBLIC_*` values are picked up.
+
 4. Deploy Phase 3 (reward pool + seed):
 
 ```bash
@@ -129,4 +131,3 @@ npm run deploy:phase5
 ```
 
 That deploys the updated contracts and enables signature verification.
-

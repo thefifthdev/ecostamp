@@ -7,7 +7,5 @@ contracts/ecostamp/.DS_Store
 frontend/.env.contracts
 frontend/.next/
 frontend/next-env.d.ts
-frontend/next-env.d.ts
-frontend/next.config.js
 .DS_Store
 .env.contracts.phase3

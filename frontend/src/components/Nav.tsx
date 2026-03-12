@@ -120,7 +120,8 @@ export default function Nav({
       key={item.id}
       onClick={() => setActiveSection(item.id)}
       className={`
-        px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200
+        px-3 lg:px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200
+        whitespace-nowrap shrink-0
         ${activeSection === item.id
           ? 'bg-moss-500/30 text-glow-300 border border-glow-300/20'
           : item.adminOnly
@@ -157,7 +158,7 @@ export default function Nav({
             </button>
 
             {/* Desktop nav */}
-            <div className="hidden md:flex items-center gap-1">
+            <div className="hidden md:flex items-center gap-1 flex-1 justify-center px-2 min-w-0 overflow-x-auto">
               {visibleNavItems.map(item => <NavButton key={item.id} item={item} />)}
             </div>
 

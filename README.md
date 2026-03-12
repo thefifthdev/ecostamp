@@ -233,6 +233,8 @@ NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS=ST<deployer>.stamp-registry
 NEXT_PUBLIC_REWARD_POOL_ADDRESS=ST<deployer>.reward-pool
 ```
 
+Note: the frontend auto-loads `frontend/.env.contracts` and `frontend/.env.contracts.phase3` via `frontend/next.config.js`, but you must restart `npm run frontend:dev` (or `npm run dev`) after deploying so the new values get picked up. Copying the values into `.env` is optional.
+
 **Verify:** Open [Hiro Explorer (testnet)](https://explorer.hiro.so/?chain=testnet) and search `ST<your-address>.stamp-registry` — the contract should be visible.
 
 ### Step 4 — (Optional) Hiro API key
@@ -529,7 +531,7 @@ Make sure `npm run oracle:dev` is running and `ORACLE_URL=http://localhost:3002`
 Start `npm run content-server:dev`. Check `CONTENT_SERVER_URL=http://localhost:3001` in `.env`.
 
 **Leather doesn't open when minting**
-`NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS` is blank. Set it in `.env` (copy from `frontend/.env.contracts` after deploy). With it blank, the component uses a demo fallback (fake txid, no Leather popup).
+`NEXT_PUBLIC_STAMP_REGISTRY_ADDRESS` is blank. Deploy Phase 1 (`npm run deploy:phase1`) and restart the Next.js dev server so it can read `frontend/.env.contracts`, or copy the value into `.env` / `frontend/.env.local`.
 
 **Admin tab not visible**
 `NEXT_PUBLIC_ADMIN_ADDRESS` is not set, or does not exactly match the connected wallet address. The comparison is case-sensitive. After changing this var, restart the Next.js dev server (`npm run frontend:dev`).
