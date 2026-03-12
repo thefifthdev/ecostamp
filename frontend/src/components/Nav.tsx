@@ -120,7 +120,7 @@ export default function Nav({
       key={item.id}
       onClick={() => setActiveSection(item.id)}
       className={`
-        px-3 lg:px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200
+        px-2.5 lg:px-4 py-2 rounded-xl text-[13px] lg:text-sm font-medium transition-all duration-200
         whitespace-nowrap shrink-0
         ${activeSection === item.id
           ? 'bg-moss-500/30 text-glow-300 border border-glow-300/20'
@@ -158,7 +158,7 @@ export default function Nav({
             </button>
 
             {/* Desktop nav */}
-            <div className="hidden md:flex items-center gap-1 flex-1 justify-center px-2 min-w-0 overflow-x-auto">
+            <div className="hidden md:flex items-center gap-0.5 flex-1 justify-center px-2 min-w-0 overflow-x-auto no-scrollbar">
               {visibleNavItems.map(item => <NavButton key={item.id} item={item} />)}
             </div>
 
@@ -179,7 +179,7 @@ export default function Nav({
                   {/* EVM chip — prod only */}
                   {!DEMO_MODE && (
                     evmAddress ? (
-                      <div className="hidden sm:flex items-center gap-2 glass-light rounded-xl px-3 py-2 border border-blue-400/20">
+                      <div className="hidden md:flex items-center gap-2 glass-light rounded-xl px-2.5 lg:px-3 py-2 border border-blue-400/20">
                         <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
                         <span className="text-xs font-mono text-blue-300">{truncate(evmAddress)}</span>
                       </div>
@@ -187,14 +187,19 @@ export default function Nav({
                       <button
                         onClick={connectEvmWallet}
                         disabled={evmConnecting}
-                        className="hidden sm:flex items-center gap-1.5 glass-light rounded-xl px-3 py-2
+                        className="hidden md:flex items-center gap-1.5 glass-light rounded-xl px-2.5 lg:px-3 py-2
                                    text-xs text-sage-400 hover:text-cream-200 border border-dashed
                                    border-sage-500/30 hover:border-blue-400/30 transition-all duration-200
                                    disabled:opacity-50"
                         title="Connect EVM wallet for USDC payments"
                       >
                         <IconWallet size={12} />
-                        {evmConnecting ? 'Connecting…' : 'EVM Wallet'}
+                        {evmConnecting ? 'Connecting…' : (
+                          <>
+                            <span className="lg:hidden">EVM</span>
+                            <span className="hidden lg:inline">EVM Wallet</span>
+                          </>
+                        )}
                       </button>
                     )
                   )}

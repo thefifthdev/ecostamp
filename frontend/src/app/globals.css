@@ -28,6 +28,15 @@ body {
   overflow-x: hidden;
 }
 
+/* Hide scrollbars while still allowing scroll (used for tight nav layouts). */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* ── Scrollbar ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #0d1f16; }
